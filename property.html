@@ -20,6 +20,7 @@
     <nav class="tabs">
       <a href="index.html">Dashboard</a>
       <a href="tenants.html">Tenants</a>
+      <a href="settings.html">Settings</a>
     </nav>
   </div>
 </header>
@@ -46,12 +47,8 @@
         </div>
       </div>
 
-      <div class="field-row">
-        <div class="field"><label>Address</label><input type="text" id="d_addr"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Tenant name</label><input type="text" id="d_tenant"></div>
-      </div>
+      <div class="field-row"><div class="field"><label>Address</label><input type="text" id="d_addr"></div></div>
+      <div class="field-row"><div class="field"><label>Tenant name</label><input type="text" id="d_tenant"></div></div>
       <div class="field-row">
         <div class="field"><label>Phone</label><input type="text" id="d_phone"></div>
         <div class="field"><label>Email</label><input type="text" id="d_email"></div>
@@ -59,31 +56,68 @@
       <div class="contact-row" id="contactLinks"></div>
 
       <div class="field-row" style="margin-top:14px;">
-        <div class="field"><label>Monthly rent (£)</label><input type="number" id="d_rent" min="0" step="0.01"></div>
-        <div class="field"><label>Current period's due date</label><input type="date" id="d_due"></div>
+        <div class="field"><label>Standard monthly rent (£)</label><input type="number" id="d_rent" min="0" step="0.01"></div>
       </div>
-      <div class="field"><label>Date paid (current period)</label><input type="date" id="d_paid"></div>
       <div class="field"><label>Notes</label><textarea id="d_notes" placeholder="e.g. pays by bank transfer, spare key held by neighbour…"></textarea></div>
 
       <div class="panel-actions">
-        <button class="btn-sm btn-mark" id="markPaidBtn">Mark paid today</button>
-        <button class="btn-sm btn-outline" id="nextMonthBtn">Raise next month's rent now</button>
         <button class="btn-sm btn-save" id="saveDetailBtn">Save changes</button>
         <button class="btn-sm btn-del" id="deleteDetailBtn">Delete property</button>
       </div>
       <div class="footnote" style="border-top:none;padding-top:0;">
-        Rent auto-renews: once this period is marked paid and its due date passes, next month's
-        charge appears automatically. "Raise next month's rent now" does the same thing on demand,
-        without waiting for the due date to pass.
+        Changing the standard rent only affects <strong>future</strong> months in the schedule below —
+        past and current entries keep the amount they were raised at.
       </div>
     </div>
 
     <div class="detail-card">
-      <div class="section-title">Payment history</div>
-      <div id="historyList"></div>
+      <div class="detail-top">
+        <div class="section-title" style="margin:0;">Rent schedule</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Month</th><th>Amount</th><th>Status</th><th>Paid</th><th>Method</th><th></th></tr>
+          </thead>
+          <tbody id="scheduleRows"></tbody>
+        </table>
+      </div>
+      <div class="footnote" style="border-top:none;">
+        New months are raised automatically as time passes, so there are always a few upcoming
+        entries here. Unpaid months never disappear on their own — mark them paid or raise an
+        invoice from the row's actions.
+      </div>
     </div>
   </div>
 </main>
+
+<!-- Log payment modal -->
+<div class="add-overlay" id="payOverlay">
+  <div class="modal">
+    <h2 id="payTitle">Log payment</h2>
+    <div class="modal-sub" id="payMonthLabel"></div>
+    <div class="field-row">
+      <div class="field"><label>Date paid</label><input type="date" id="pay_date"></div>
+      <div class="field"><label>Amount (£)</label><input type="number" id="pay_amount" min="0" step="0.01"></div>
+    </div>
+    <div class="field">
+      <label>Method</label>
+      <select id="pay_method" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;font-size:13.5px;font-family:inherit;">
+        <option value="Bank transfer">Bank transfer</option>
+        <option value="Cash">Cash</option>
+        <option value="Cheque">Cheque</option>
+        <option value="Card">Card</option>
+        <option value="Standing order">Standing order</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="field"><label>Note (optional)</label><input type="text" id="pay_note" placeholder="e.g. paid £50 short, remainder next month"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="cancelPayBtn">Cancel</button>
+      <button class="btn-primary" id="savePayBtn">Save payment</button>
+    </div>
+  </div>
+</div>
 
 <script src="data.js"></script>
 <script>
@@ -91,9 +125,12 @@
   const propId = params.get("id");
   let data = [];
   let current = null;
+  let agency = null;
+  let payingDue = null; // which period's due-date we're currently logging a payment for
 
   async function init(){
     data = await loadData();
+    agency = await loadAgency();
     renderSyncBanner("syncBanner");
     current = data.find(p=>p.id===propId);
     if(!current){
@@ -105,7 +142,8 @@
   }
 
   function fillForm(){
-    const st = status(current);
+    const cp = currentPeriod(current);
+    const st = periodStatus(cp);
     document.getElementById("d_id").textContent = current.id;
     document.getElementById("d_addrLabel").textContent = current.addr;
     document.getElementById("d_badge").textContent = st==="paid"?"Paid":st==="flagged"?"Flagged":"Pending";
@@ -117,8 +155,6 @@
     document.getElementById("d_phone").value = current.phone || "";
     document.getElementById("d_email").value = current.email || "";
     document.getElementById("d_rent").value = current.rent;
-    document.getElementById("d_due").value = current.due || "";
-    document.getElementById("d_paid").value = current.paid || "";
     document.getElementById("d_notes").value = current.notes || "";
 
     const links = [];
@@ -126,30 +162,80 @@
     if(current.email) links.push(`<a href="mailto:${escapeHtml(current.email)}">Email ${escapeHtml(current.email)}</a>`);
     document.getElementById("contactLinks").innerHTML = links.join("");
 
-    const hist = current.history && current.history.length
-      ? current.history.slice().reverse().map(h=>`
-          <div class="history-item">
-            <span>Due ${fmtDate(h.due)} — paid ${fmtDate(h.date)}</span>
-            <span>${fmtGBP(h.amount)}</span>
-          </div>`).join("")
-      : `<div class="history-empty">No payments logged yet.</div>`;
-    document.getElementById("historyList").innerHTML = hist;
+    renderSchedule();
   }
 
-  document.getElementById("markPaidBtn").addEventListener("click", async ()=>{
-    const paidDate = TODAY.toISOString().slice(0,10);
-    current.paid = paidDate;
-    current.history = current.history || [];
-    current.history.push({date: paidDate, amount: Number(current.rent), due: current.due});
-    await saveData(data);
-    fillForm();
+  function renderSchedule(){
+    const rows = current.periods.slice().sort((a,b)=> a.due < b.due ? 1 : -1); // newest first
+    document.getElementById("scheduleRows").innerHTML = rows.map(pr=>{
+      const st = periodStatus(pr);
+      const badgeLabel = st==="paid" ? "Paid" : st==="flagged" ? "Flagged" : "Pending";
+      let actions = "";
+      if(st === "paid"){
+        actions = `<button class="btn-sm btn-outline" data-action="unpay" data-due="${pr.due}">Mark unpaid</button>`;
+      } else {
+        actions = `
+          <button class="btn-sm btn-mark" data-action="pay" data-due="${pr.due}">Mark paid</button>
+          <button class="btn-sm btn-outline" data-action="invoice" data-due="${pr.due}">Raise invoice</button>
+        `;
+      }
+      return `
+        <tr>
+          <td data-label="Month">${fmtMonth(pr.due)} <span class="addr">(due ${fmtDate(pr.due)})</span></td>
+          <td data-label="Amount">${fmtGBP(pr.amount)}</td>
+          <td data-label="Status"><span class="badge ${st}">${badgeLabel}</span></td>
+          <td data-label="Paid">${fmtDate(pr.paid)}</td>
+          <td data-label="Method">${pr.method ? escapeHtml(pr.method) : "—"}</td>
+          <td data-label="" style="white-space:nowrap;">${actions}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  document.getElementById("scheduleRows").addEventListener("click", async (e)=>{
+    const btn = e.target.closest("button");
+    if(!btn) return;
+    const due = btn.dataset.due;
+    const period = current.periods.find(pr=>pr.due===due);
+    const action = btn.dataset.action;
+
+    if(action === "pay"){
+      openPayModal(period);
+    } else if(action === "unpay"){
+      if(!confirm(`Mark ${fmtMonth(period.due)} as unpaid again? This clears its payment record.`)) return;
+      period.paid = null; period.method = ""; period.note = "";
+      await saveData(data);
+      renderSchedule();
+      fillForm();
+    } else if(action === "invoice"){
+      raiseInvoice(current, period, agency);
+    }
   });
 
-  document.getElementById("nextMonthBtn").addEventListener("click", async ()=>{
-    if(!confirm(`Raise next month's rent for ${current.id} now? This moves the due date forward one month and clears the current paid status.`)) return;
-    current.due = addMonths(current.due, 1);
-    current.paid = null;
+  function openPayModal(period){
+    payingDue = period.due;
+    document.getElementById("payMonthLabel").textContent = `${fmtMonth(period.due)} — due ${fmtDate(period.due)}`;
+    document.getElementById("pay_date").value = TODAY.toISOString().slice(0,10);
+    document.getElementById("pay_amount").value = period.amount;
+    document.getElementById("pay_method").value = period.method || "Bank transfer";
+    document.getElementById("pay_note").value = period.note || "";
+    document.getElementById("payOverlay").classList.add("open");
+  }
+  document.getElementById("cancelPayBtn").addEventListener("click", ()=>document.getElementById("payOverlay").classList.remove("open"));
+  document.getElementById("payOverlay").addEventListener("click", e=>{
+    if(e.target.id === "payOverlay") document.getElementById("payOverlay").classList.remove("open");
+  });
+  document.getElementById("savePayBtn").addEventListener("click", async ()=>{
+    const period = current.periods.find(pr=>pr.due===payingDue);
+    const paidDate = document.getElementById("pay_date").value;
+    if(!paidDate){ alert("Please enter the date paid."); return; }
+    period.paid = paidDate;
+    period.amount = Number(document.getElementById("pay_amount").value) || period.amount;
+    period.method = document.getElementById("pay_method").value;
+    period.note = document.getElementById("pay_note").value;
+    document.getElementById("payOverlay").classList.remove("open");
     await saveData(data);
+    renderSchedule();
     fillForm();
   });
 
@@ -159,9 +245,11 @@
     current.phone = document.getElementById("d_phone").value.trim();
     current.email = document.getElementById("d_email").value.trim();
     current.rent = Number(document.getElementById("d_rent").value) || 0;
-    current.due = document.getElementById("d_due").value;
-    current.paid = document.getElementById("d_paid").value || null;
     current.notes = document.getElementById("d_notes").value;
+    // Update the amount for any not-yet-due, unpaid future periods to match the new standard rent.
+    current.periods.forEach(pr=>{
+      if(!pr.paid && new Date(pr.due) >= TODAY) pr.amount = current.rent;
+    });
     await saveData(data);
     fillForm();
     alert("Saved.");

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rent Manager — Settings</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <a href="index.html">
+      <div class="mark">R</div>
+      <div>
+        <h1>Rent Manager</h1>
+        <div class="sub">Settings</div>
+      </div>
+    </a>
+    <nav class="tabs">
+      <a href="index.html">Dashboard</a>
+      <a href="tenants.html">Tenants</a>
+      <a href="settings.html" class="active">Settings</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div id="syncBanner"></div>
+
+  <div class="detail-card" style="max-width:520px;">
+    <div class="section-title">Invoice details</div>
+    <div class="footnote" style="border-top:none;padding-top:0;margin-top:0;margin-bottom:16px;">
+      Shown on every invoice you raise from a property's Rent schedule. Leave blank and invoices
+      will show a placeholder reminding you to fill this in.
+    </div>
+
+    <div class="field"><label>Agency / landlord name</label><input type="text" id="a_name" placeholder="e.g. Riverside Lettings Ltd"></div>
+    <div class="field"><label>Address</label><textarea id="a_address" placeholder="e.g. 1 High Street, Oxford, OX1 1AA"></textarea></div>
+    <div class="field-row">
+      <div class="field"><label>Contact email</label><input type="text" id="a_email" placeholder="hello@example.com"></div>
+      <div class="field"><label>Contact phone</label><input type="text" id="a_phone" placeholder="01865 000000"></div>
+    </div>
+    <div class="field"><label>Payment / bank details</label><textarea id="a_bank" placeholder="e.g. Sort code 00-00-00, Account 12345678, reference = property ID"></textarea></div>
+
+    <div class="panel-actions">
+      <button class="btn-sm btn-save" id="saveAgencyBtn">Save details</button>
+    </div>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script>
+  async function init(){
+    await loadData(); // establishes storageMode before we touch agency settings
+    renderSyncBanner("syncBanner");
+    const agency = await loadAgency();
+    document.getElementById("a_name").value = agency.name || "";
+    document.getElementById("a_address").value = agency.address || "";
+    document.getElementById("a_email").value = agency.email || "";
+    document.getElementById("a_phone").value = agency.phone || "";
+    document.getElementById("a_bank").value = agency.bankDetails || "";
+  }
+
+  document.getElementById("saveAgencyBtn").addEventListener("click", async ()=>{
+    const agency = {
+      name: document.getElementById("a_name").value.trim(),
+      address: document.getElementById("a_address").value.trim(),
+      email: document.getElementById("a_email").value.trim(),
+      phone: document.getElementById("a_phone").value.trim(),
+      bankDetails: document.getElementById("a_bank").value.trim(),
+    };
+    await saveAgency(agency);
+    alert("Saved.");
+  });
+
+  init();
+</script>
+</body>
+</html>
