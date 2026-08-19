@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rent Manager — Dashboard</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <a href="index.html">
+      <div class="mark">R</div>
+      <div>
+        <h1>Rent Manager</h1>
+        <div class="sub">Payment tracking &amp; overview</div>
+      </div>
+    </a>
+    <nav class="tabs">
+      <a href="index.html" class="active">Dashboard</a>
+      <a href="tenants.html">Tenants</a>
+    </nav>
+  </div>
+  <div class="actions">
+    <button class="btn-ghost" id="exportBtn">Export backup</button>
+    <button class="btn-ghost" id="importBtn">Import backup</button>
+    <input type="file" id="importFile" accept="application/json" style="display:none;">
+    <button class="btn-ghost" id="resetBtn">Reset sample data</button>
+    <button class="btn-primary" id="addBtn">+ Add property</button>
+  </div>
+</header>
+
+<main>
+  <div id="syncBanner"></div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="controls">
+    <input type="text" id="search" placeholder="Search by tenant, property ID or address…">
+    <div class="chip active" data-filter="all">All</div>
+    <div class="chip" data-filter="flagged">Flagged</div>
+    <div class="chip" data-filter="pending">Pending</div>
+    <div class="chip" data-filter="paid">Paid</div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Property</th>
+          <th>Tenant</th>
+          <th>Rent</th>
+          <th>Due date</th>
+          <th>Status</th>
+          <th>Overdue</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="loading" id="loadingMsg">Loading your properties…</div>
+    <div class="empty" id="emptyMsg" style="display:none;">No properties match this filter.</div>
+  </div>
+
+  <div class="footnote">
+    Click any row to open its full details, payment history and contact info in a new tab.
+    Rent auto-renews each month: once a period is marked paid and its due date passes, the
+    next month's charge is raised automatically. Anything left unpaid stays flagged — it never
+    rolls forward silently.
+  </div>
+</main>
+
+<div class="add-overlay" id="addOverlay">
+  <div class="modal">
+    <h2>Add property</h2>
+    <div class="modal-sub">Enter the tenancy details. Rent in £, dates as shown.</div>
+    <div class="field"><label>Property ID</label><input type="text" id="f_id" placeholder="PROP-07"></div>
+    <div class="field"><label>Address</label><input type="text" id="f_addr" placeholder="4 Station Road, Didcot, OX11 7LN"></div>
+    <div class="field"><label>Tenant name</label><input type="text" id="f_tenant" placeholder="A. Patel"></div>
+    <div class="field-row">
+      <div class="field"><label>Phone</label><input type="text" id="f_phone" placeholder="07700 900000"></div>
+      <div class="field"><label>Email</label><input type="text" id="f_email" placeholder="tenant@example.com"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Monthly rent (£)</label><input type="number" id="f_rent" placeholder="950" min="0" step="0.01"></div>
+      <div class="field"><label>Rent due date</label><input type="date" id="f_due"></div>
+    </div>
+    <div class="field"><label>Date paid (leave blank if unpaid)</label><input type="date" id="f_paid"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="cancelAddBtn">Cancel</button>
+      <button class="btn-primary" id="saveAddBtn">Save property</button>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+  let data = [];
+  let activeFilter = "all";
+  let searchTerm = "";
+
+  async function init(){
+    data = await loadData();
+    document.getElementById("loadingMsg").style.display = "none";
+    renderSyncBanner("syncBanner");
+    render();
+  }
+
+  function render(){
+    const total = data.length;
+    const expected = data.reduce((s,p)=>s+Number(p.rent),0);
+    const collected = data.filter(p=>status(p)==="paid").reduce((s,p)=>s+Number(p.rent),0);
+    const overdueAmt = data.filter(p=>status(p)==="flagged").reduce((s,p)=>s+Number(p.rent),0);
+    const flaggedCount = data.filter(p=>status(p)==="flagged").length;
+
+    document.getElementById("kpis").innerHTML = `
+      <div class="kpi"><div class="label">Properties</div><div class="value">${total}</div></div>
+      <div class="kpi"><div class="label">Rent expected</div><div class="value">${fmtGBP(expected)}</div></div>
+      <div class="kpi paid"><div class="label">Collected</div><div class="value">${fmtGBP(collected)}</div></div>
+      <div class="kpi flag"><div class="label">Overdue</div><div class="value">${fmtGBP(overdueAmt)}</div></div>
+      <div class="kpi flag"><div class="label">Flagged</div><div class="value">${flaggedCount}</div></div>
+    `;
+
+    let rows = data.filter(p=>{
+      if(activeFilter!=="all" && status(p)!==activeFilter) return false;
+      if(searchTerm){
+        const hay = (p.id+" "+p.tenant+" "+p.addr).toLowerCase();
+        if(!hay.includes(searchTerm.toLowerCase())) return false;
+      }
+      return true;
+    });
+
+    const tbody = document.getElementById("rows");
+    const emptyMsg = document.getElementById("emptyMsg");
+    if(rows.length === 0){
+      tbody.innerHTML = "";
+      emptyMsg.style.display = "block";
+    } else {
+      emptyMsg.style.display = "none";
+      tbody.innerHTML = rows.map(p=>{
+        const st = status(p);
+        const badgeLabel = st==="paid" ? "Paid" : st==="flagged" ? "Flagged" : "Pending";
+        const overdue = daysOverdue(p);
+        return `
+          <tr class="clickable" data-id="${p.id}">
+            <td data-label="Property"><div class="prop-id">${escapeHtml(p.id)}</div><div class="addr">${escapeHtml(p.addr)}</div></td>
+            <td data-label="Tenant">${escapeHtml(p.tenant)}</td>
+            <td data-label="Rent">${fmtGBP(p.rent)}</td>
+            <td data-label="Due date">${fmtDate(p.due)}</td>
+            <td data-label="Status"><span class="badge ${st}">${badgeLabel}</span></td>
+            <td data-label="Overdue">${overdue > 0 ? overdue + " days" : "—"}</td>
+            <td data-label=""><span class="chevron">›</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+
+  document.getElementById("rows").addEventListener("click", e=>{
+    const tr = e.target.closest("tr[data-id]");
+    if(!tr) return;
+    window.open(`property.html?id=${encodeURIComponent(tr.dataset.id)}`, "_blank");
+  });
+
+  document.getElementById("search").addEventListener("input", e=>{ searchTerm = e.target.value; render(); });
+  document.querySelectorAll(".chip").forEach(chip=>{
+    chip.addEventListener("click", ()=>{
+      document.querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+      chip.classList.add("active");
+      activeFilter = chip.dataset.filter;
+      render();
+    });
+  });
+
+  document.getElementById("exportBtn").addEventListener("click", ()=>exportBackup(data));
+  document.getElementById("importBtn").addEventListener("click", ()=>document.getElementById("importFile").click());
+  document.getElementById("importFile").addEventListener("change", (e)=>{
+    const file = e.target.files[0];
+    if(file) importBackup(file, (newData)=>{ data = newData; rolloverPaidPeriods(data); render(); });
+    e.target.value = "";
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", async ()=>{
+    if(!confirm("Reset to sample data? This clears anything you've added or edited, on every device.")) return;
+    data = seedData();
+    await saveData(data);
+    render();
+  });
+
+  document.getElementById("addBtn").addEventListener("click", ()=>{
+    ["f_id","f_addr","f_tenant","f_phone","f_email","f_rent","f_due","f_paid"].forEach(id=>document.getElementById(id).value="");
+    document.getElementById("addOverlay").classList.add("open");
+  });
+  document.getElementById("cancelAddBtn").addEventListener("click", ()=>document.getElementById("addOverlay").classList.remove("open"));
+  document.getElementById("addOverlay").addEventListener("click", e=>{
+    if(e.target.id === "addOverlay") document.getElementById("addOverlay").classList.remove("open");
+  });
+  document.getElementById("saveAddBtn").addEventListener("click", async ()=>{
+    const id = document.getElementById("f_id").value.trim();
+    const addr = document.getElementById("f_addr").value.trim();
+    const tenant = document.getElementById("f_tenant").value.trim();
+    const phone = document.getElementById("f_phone").value.trim();
+    const email = document.getElementById("f_email").value.trim();
+    const rent = document.getElementById("f_rent").value;
+    const due = document.getElementById("f_due").value;
+    const paid = document.getElementById("f_paid").value;
+
+    if(!id || !addr || !tenant || !rent || !due){
+      alert("Please fill in Property ID, Address, Tenant, Rent and Due date.");
+      return;
+    }
+    if(data.some(x=>x.id===id)){
+      alert("That Property ID already exists.");
+      return;
+    }
+    const history = paid ? [{date: paid, amount: Number(rent), due}] : [];
+    data.push({id, addr, tenant, phone, email, rent:Number(rent), due, paid: paid || null, notes:"", history});
+    document.getElementById("addOverlay").classList.remove("open");
+    await saveData(data);
+    render();
+  });
+
+  init();
+</script>
+</body>
+</html>

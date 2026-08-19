@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rent Manager — Property</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <a href="index.html">
+      <div class="mark">R</div>
+      <div>
+        <h1>Rent Manager</h1>
+        <div class="sub">Property details</div>
+      </div>
+    </a>
+    <nav class="tabs">
+      <a href="index.html">Dashboard</a>
+      <a href="tenants.html">Tenants</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div id="syncBanner"></div>
+  <a class="back-link" href="index.html">&larr; Back to dashboard</a>
+
+  <div id="notFound" class="empty" style="display:none;">
+    Can't find that property — it may have been deleted or the link is out of date.
+    <div style="margin-top:12px;"><a class="btn-link btn-outline btn-sm" href="index.html">Return to dashboard</a></div>
+  </div>
+
+  <div id="content" style="display:none;">
+    <div class="detail-card">
+      <div class="detail-top">
+        <div>
+          <h2 id="d_id">—</h2>
+          <div class="addr" id="d_addrLabel"></div>
+        </div>
+        <div>
+          <span class="badge" id="d_badge">—</span>
+          <span id="d_overdue" style="font-size:12.5px;color:var(--flag);margin-left:6px;"></span>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field"><label>Address</label><input type="text" id="d_addr"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Tenant name</label><input type="text" id="d_tenant"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Phone</label><input type="text" id="d_phone"></div>
+        <div class="field"><label>Email</label><input type="text" id="d_email"></div>
+      </div>
+      <div class="contact-row" id="contactLinks"></div>
+
+      <div class="field-row" style="margin-top:14px;">
+        <div class="field"><label>Monthly rent (£)</label><input type="number" id="d_rent" min="0" step="0.01"></div>
+        <div class="field"><label>Current period's due date</label><input type="date" id="d_due"></div>
+      </div>
+      <div class="field"><label>Date paid (current period)</label><input type="date" id="d_paid"></div>
+      <div class="field"><label>Notes</label><textarea id="d_notes" placeholder="e.g. pays by bank transfer, spare key held by neighbour…"></textarea></div>
+
+      <div class="panel-actions">
+        <button class="btn-sm btn-mark" id="markPaidBtn">Mark paid today</button>
+        <button class="btn-sm btn-outline" id="nextMonthBtn">Raise next month's rent now</button>
+        <button class="btn-sm btn-save" id="saveDetailBtn">Save changes</button>
+        <button class="btn-sm btn-del" id="deleteDetailBtn">Delete property</button>
+      </div>
+      <div class="footnote" style="border-top:none;padding-top:0;">
+        Rent auto-renews: once this period is marked paid and its due date passes, next month's
+        charge appears automatically. "Raise next month's rent now" does the same thing on demand,
+        without waiting for the due date to pass.
+      </div>
+    </div>
+
+    <div class="detail-card">
+      <div class="section-title">Payment history</div>
+      <div id="historyList"></div>
+    </div>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script>
+  const params = new URLSearchParams(location.search);
+  const propId = params.get("id");
+  let data = [];
+  let current = null;
+
+  async function init(){
+    data = await loadData();
+    renderSyncBanner("syncBanner");
+    current = data.find(p=>p.id===propId);
+    if(!current){
+      document.getElementById("notFound").style.display = "block";
+      return;
+    }
+    document.getElementById("content").style.display = "block";
+    fillForm();
+  }
+
+  function fillForm(){
+    const st = status(current);
+    document.getElementById("d_id").textContent = current.id;
+    document.getElementById("d_addrLabel").textContent = current.addr;
+    document.getElementById("d_badge").textContent = st==="paid"?"Paid":st==="flagged"?"Flagged":"Pending";
+    document.getElementById("d_badge").className = "badge " + st;
+    document.getElementById("d_overdue").textContent = st==="flagged" ? `${daysOverdue(current)} days overdue` : "";
+
+    document.getElementById("d_addr").value = current.addr;
+    document.getElementById("d_tenant").value = current.tenant;
+    document.getElementById("d_phone").value = current.phone || "";
+    document.getElementById("d_email").value = current.email || "";
+    document.getElementById("d_rent").value = current.rent;
+    document.getElementById("d_due").value = current.due || "";
+    document.getElementById("d_paid").value = current.paid || "";
+    document.getElementById("d_notes").value = current.notes || "";
+
+    const links = [];
+    if(current.phone) links.push(`<a href="tel:${escapeHtml(current.phone)}">Call ${escapeHtml(current.phone)}</a>`);
+    if(current.email) links.push(`<a href="mailto:${escapeHtml(current.email)}">Email ${escapeHtml(current.email)}</a>`);
+    document.getElementById("contactLinks").innerHTML = links.join("");
+
+    const hist = current.history && current.history.length
+      ? current.history.slice().reverse().map(h=>`
+          <div class="history-item">
+            <span>Due ${fmtDate(h.due)} — paid ${fmtDate(h.date)}</span>
+            <span>${fmtGBP(h.amount)}</span>
+          </div>`).join("")
+      : `<div class="history-empty">No payments logged yet.</div>`;
+    document.getElementById("historyList").innerHTML = hist;
+  }
+
+  document.getElementById("markPaidBtn").addEventListener("click", async ()=>{
+    const paidDate = TODAY.toISOString().slice(0,10);
+    current.paid = paidDate;
+    current.history = current.history || [];
+    current.history.push({date: paidDate, amount: Number(current.rent), due: current.due});
+    await saveData(data);
+    fillForm();
+  });
+
+  document.getElementById("nextMonthBtn").addEventListener("click", async ()=>{
+    if(!confirm(`Raise next month's rent for ${current.id} now? This moves the due date forward one month and clears the current paid status.`)) return;
+    current.due = addMonths(current.due, 1);
+    current.paid = null;
+    await saveData(data);
+    fillForm();
+  });
+
+  document.getElementById("saveDetailBtn").addEventListener("click", async ()=>{
+    current.addr = document.getElementById("d_addr").value.trim();
+    current.tenant = document.getElementById("d_tenant").value.trim();
+    current.phone = document.getElementById("d_phone").value.trim();
+    current.email = document.getElementById("d_email").value.trim();
+    current.rent = Number(document.getElementById("d_rent").value) || 0;
+    current.due = document.getElementById("d_due").value;
+    current.paid = document.getElementById("d_paid").value || null;
+    current.notes = document.getElementById("d_notes").value;
+    await saveData(data);
+    fillForm();
+    alert("Saved.");
+  });
+
+  document.getElementById("deleteDetailBtn").addEventListener("click", async ()=>{
+    if(!confirm(`Remove ${current.id} from the tracker? This cannot be undone.`)) return;
+    data = data.filter(x=>x.id!==current.id);
+    await saveData(data);
+    location.href = "index.html";
+  });
+
+  if(!propId){
+    document.getElementById("notFound").style.display = "block";
+  } else {
+    init();
+  }
+</script>
+</body>
+</html>

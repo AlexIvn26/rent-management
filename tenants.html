@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rent Manager — Tenants</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <a href="index.html">
+      <div class="mark">R</div>
+      <div>
+        <h1>Rent Manager</h1>
+        <div class="sub">Tenant directory</div>
+      </div>
+    </a>
+    <nav class="tabs">
+      <a href="index.html">Dashboard</a>
+      <a href="tenants.html" class="active">Tenants</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div id="syncBanner"></div>
+
+  <div class="controls">
+    <input type="text" id="search" placeholder="Search by tenant name, phone, email or property…">
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tenant</th>
+          <th>Property</th>
+          <th>Phone</th>
+          <th>Email</th>
+          <th>Rent status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="loading" id="loadingMsg">Loading tenants…</div>
+    <div class="empty" id="emptyMsg" style="display:none;">No tenants match this search.</div>
+  </div>
+
+  <div class="footnote">
+    Contact details are edited from each property's detail page (click through from the
+    Dashboard). This page is a quick directory for calling or emailing tenants and jumping
+    straight to their property record.
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script>
+  let data = [];
+  let searchTerm = "";
+
+  async function init(){
+    data = await loadData();
+    document.getElementById("loadingMsg").style.display = "none";
+    renderSyncBanner("syncBanner");
+    render();
+  }
+
+  function render(){
+    let rows = data.filter(p=>{
+      if(!searchTerm) return true;
+      const hay = (p.tenant+" "+p.phone+" "+p.email+" "+p.addr+" "+p.id).toLowerCase();
+      return hay.includes(searchTerm.toLowerCase());
+    });
+
+    const tbody = document.getElementById("rows");
+    const emptyMsg = document.getElementById("emptyMsg");
+    if(rows.length === 0){
+      tbody.innerHTML = "";
+      emptyMsg.style.display = "block";
+    } else {
+      emptyMsg.style.display = "none";
+      tbody.innerHTML = rows.map(p=>{
+        const st = status(p);
+        const badgeLabel = st==="paid" ? "Paid" : st==="flagged" ? "Flagged" : "Pending";
+        return `
+          <tr>
+            <td data-label="Tenant">${escapeHtml(p.tenant)}</td>
+            <td data-label="Property"><div class="prop-id">${escapeHtml(p.id)}</div><div class="addr">${escapeHtml(p.addr)}</div></td>
+            <td data-label="Phone">${p.phone ? `<a href="tel:${escapeHtml(p.phone)}">${escapeHtml(p.phone)}</a>` : "—"}</td>
+            <td data-label="Email">${p.email ? `<a href="mailto:${escapeHtml(p.email)}">${escapeHtml(p.email)}</a>` : "—"}</td>
+            <td data-label="Rent status"><span class="badge ${st}">${badgeLabel}</span></td>
+            <td data-label=""><a class="btn-link btn-outline btn-sm" href="property.html?id=${encodeURIComponent(p.id)}" target="_blank">Open property &rarr;</a></td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+
+  document.getElementById("search").addEventListener("input", e=>{ searchTerm = e.target.value; render(); });
+
+  init();
+</script>
+</body>
+</html>
