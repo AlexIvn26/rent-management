@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Rent Manager — Dashboard</title>
 <link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -20,9 +21,12 @@
     <nav class="tabs">
       <a href="index.html" class="active">Dashboard</a>
       <a href="tenants.html">Tenants</a>
+      <a href="settings.html">Settings</a>
     </nav>
   </div>
   <div class="actions">
+    <button class="btn-ghost" id="exportExcelBtn">Download Excel</button>
+    <button class="btn-ghost" id="exportPdfBtn">Download PDF</button>
     <button class="btn-ghost" id="exportBtn">Export backup</button>
     <button class="btn-ghost" id="importBtn">Import backup</button>
     <input type="file" id="importFile" accept="application/json" style="display:none;">
@@ -34,6 +38,16 @@
 <main>
   <div id="syncBanner"></div>
   <div class="kpis" id="kpis"></div>
+
+  <div id="remindersSection" style="display:none;margin-bottom:22px;">
+    <div class="section-title" style="color:var(--flag);">⚠ Rent due reminders</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Property</th><th>Tenant</th><th>Amount due</th><th>Unpaid</th><th>Partial</th><th>Worst overdue</th><th></th></tr></thead>
+        <tbody id="reminderRows"></tbody>
+      </table>
+    </div>
+  </div>
 
   <div class="controls">
     <input type="text" id="search" placeholder="Search by tenant, property ID or address…">
@@ -106,20 +120,49 @@
     render();
   }
 
+  function renderReminders(){
+    const withDue = data
+      .map(p=>({p, s: propertyStats(p)}))
+      .filter(x=>x.s.amountDue > 0)
+      .sort((a,b)=> b.s.amountDue - a.s.amountDue);
+
+    const section = document.getElementById("remindersSection");
+    if(withDue.length === 0){ section.style.display = "none"; return; }
+    section.style.display = "block";
+    document.getElementById("reminderRows").innerHTML = withDue.map(({p,s})=>`
+      <tr class="clickable" data-id="${p.id}">
+        <td data-label="Property"><div class="prop-id">${escapeHtml(p.id)}</div><div class="addr">${escapeHtml(p.addr)}</div></td>
+        <td data-label="Tenant">${escapeHtml(p.tenant)}</td>
+        <td data-label="Amount due">${fmtGBP(s.amountDue)}</td>
+        <td data-label="Unpaid">${s.unpaidMonths}</td>
+        <td data-label="Partial">${s.partialMonths}</td>
+        <td data-label="Worst overdue">${s.worstOverdueDays > 0 ? s.worstOverdueDays + " days" : "—"}</td>
+        <td data-label=""><span class="chevron">›</span></td>
+      </tr>
+    `).join("");
+    document.getElementById("reminderRows").querySelectorAll("tr").forEach(tr=>{
+      tr.addEventListener("click", ()=> window.open(`property.html?id=${encodeURIComponent(tr.dataset.id)}`, "_blank"));
+    });
+  }
+
   function render(){
     const total = data.length;
     const expected = data.reduce((s,p)=>s+Number(p.rent),0);
-    const collected = data.filter(p=>status(p)==="paid").reduce((s,p)=>s+Number(p.rent),0);
-    const overdueAmt = data.filter(p=>status(p)==="flagged").reduce((s,p)=>s+Number(p.rent),0);
+    const collected = round2(data.reduce((s,p)=>s+propertyStats(p).paidToDate,0));
+    const overdueAmt = round2(data.reduce((s,p)=>s+propertyStats(p).amountDue,0));
     const flaggedCount = data.filter(p=>status(p)==="flagged").length;
+    const partialCount = data.filter(p=>status(p)==="partial").length;
 
     document.getElementById("kpis").innerHTML = `
       <div class="kpi"><div class="label">Properties</div><div class="value">${total}</div></div>
       <div class="kpi"><div class="label">Rent expected</div><div class="value">${fmtGBP(expected)}</div></div>
       <div class="kpi paid"><div class="label">Collected</div><div class="value">${fmtGBP(collected)}</div></div>
-      <div class="kpi flag"><div class="label">Overdue</div><div class="value">${fmtGBP(overdueAmt)}</div></div>
+      <div class="kpi flag"><div class="label">Total overdue</div><div class="value">${fmtGBP(overdueAmt)}</div></div>
       <div class="kpi flag"><div class="label">Flagged</div><div class="value">${flaggedCount}</div></div>
+      <div class="kpi"><div class="label">Partial</div><div class="value">${partialCount}</div></div>
     `;
+
+    renderReminders();
 
     let rows = data.filter(p=>{
       if(activeFilter!=="all" && status(p)!==activeFilter) return false;
@@ -137,22 +180,23 @@
       emptyMsg.style.display = "block";
     } else {
       emptyMsg.style.display = "none";
-      tbody.innerHTML = rows.map(p=>{
+      rows = rows.map(p=>{
         const st = status(p);
-        const badgeLabel = st==="paid" ? "Paid" : st==="flagged" ? "Flagged" : "Pending";
+        const cp = currentPeriod(p);
         const overdue = daysOverdue(p);
         return `
           <tr class="clickable" data-id="${p.id}">
             <td data-label="Property"><div class="prop-id">${escapeHtml(p.id)}</div><div class="addr">${escapeHtml(p.addr)}</div></td>
             <td data-label="Tenant">${escapeHtml(p.tenant)}</td>
-            <td data-label="Rent">${fmtGBP(p.rent)}</td>
-            <td data-label="Due date">${fmtDate(p.due)}</td>
-            <td data-label="Status"><span class="badge ${st}">${badgeLabel}</span></td>
+            <td data-label="Rent">${fmtGBP(cp.amount)}</td>
+            <td data-label="Due date">${fmtDate(cp.due)}</td>
+            <td data-label="Status"><span class="badge ${st}">${statusLabel(st)}</span></td>
             <td data-label="Overdue">${overdue > 0 ? overdue + " days" : "—"}</td>
             <td data-label=""><span class="chevron">›</span></td>
           </tr>
         `;
-      }).join("");
+      });
+      tbody.innerHTML = rows.join("");
     }
   }
 
@@ -172,6 +216,8 @@
     });
   });
 
+  document.getElementById("exportExcelBtn").addEventListener("click", ()=>exportPortfolioExcel(data));
+  document.getElementById("exportPdfBtn").addEventListener("click", ()=>printPortfolioStatement(data));
   document.getElementById("exportBtn").addEventListener("click", ()=>exportBackup(data));
   document.getElementById("importBtn").addEventListener("click", ()=>document.getElementById("importFile").click());
   document.getElementById("importFile").addEventListener("change", (e)=>{
@@ -213,8 +259,10 @@
       alert("That Property ID already exists.");
       return;
     }
-    const history = paid ? [{date: paid, amount: Number(rent), due}] : [];
-    data.push({id, addr, tenant, phone, email, rent:Number(rent), due, paid: paid || null, notes:"", history});
+    const payments = paid ? [{id: genId(), date: paid, amount: Number(rent), method:"Bank transfer", note:""}] : [];
+    const newProp = {id, addr, tenant, phone, email, rent:Number(rent), periods:[{due, amount:Number(rent)}], payments, log:[]};
+    ensureFuturePeriods(newProp);
+    data.push(newProp);
     document.getElementById("addOverlay").classList.remove("open");
     await saveData(data);
     render();

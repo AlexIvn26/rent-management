@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Rent Manager — Property</title>
 <link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -12,10 +13,7 @@
   <div class="brand">
     <a href="index.html">
       <div class="mark">R</div>
-      <div>
-        <h1>Rent Manager</h1>
-        <div class="sub">Property details</div>
-      </div>
+      <div><h1>Rent Manager</h1><div class="sub">Property details</div></div>
     </a>
     <nav class="tabs">
       <a href="index.html">Dashboard</a>
@@ -37,14 +35,8 @@
   <div id="content" style="display:none;">
     <div class="detail-card">
       <div class="detail-top">
-        <div>
-          <h2 id="d_id">—</h2>
-          <div class="addr" id="d_addrLabel"></div>
-        </div>
-        <div>
-          <span class="badge" id="d_badge">—</span>
-          <span id="d_overdue" style="font-size:12.5px;color:var(--flag);margin-left:6px;"></span>
-        </div>
+        <div><h2 id="d_id">—</h2><div class="addr" id="d_addrLabel"></div></div>
+        <div><span class="badge" id="d_badge">—</span></div>
       </div>
 
       <div class="field-row"><div class="field"><label>Address</label><input type="text" id="d_addr"></div></div>
@@ -54,39 +46,65 @@
         <div class="field"><label>Email</label><input type="text" id="d_email"></div>
       </div>
       <div class="contact-row" id="contactLinks"></div>
-
       <div class="field-row" style="margin-top:14px;">
         <div class="field"><label>Standard monthly rent (£)</label><input type="number" id="d_rent" min="0" step="0.01"></div>
       </div>
-      <div class="field"><label>Notes</label><textarea id="d_notes" placeholder="e.g. pays by bank transfer, spare key held by neighbour…"></textarea></div>
-
       <div class="panel-actions">
         <button class="btn-sm btn-save" id="saveDetailBtn">Save changes</button>
         <button class="btn-sm btn-del" id="deleteDetailBtn">Delete property</button>
       </div>
       <div class="footnote" style="border-top:none;padding-top:0;">
-        Changing the standard rent only affects <strong>future</strong> months in the schedule below —
-        past and current entries keep the amount they were raised at.
+        Changing the standard rent only affects <strong>future, not-yet-billed</strong> months.
+      </div>
+    </div>
+
+    <div class="detail-card">
+      <div class="detail-top">
+        <div class="section-title" style="margin:0;">Summary</div>
+        <div class="panel-actions" style="margin:0;">
+          <button class="btn-sm btn-outline" id="exportExcelBtn">Download Excel</button>
+          <button class="btn-sm btn-outline" id="exportPdfBtn">Download PDF</button>
+        </div>
+      </div>
+      <div class="kpis" id="statsKpis" style="margin-bottom:6px;"></div>
+      <div class="footnote" style="border-top:none;padding-top:0;margin-top:4px;">
+        "Amount due" already accounts for any overpayment — if the tenant has paid ahead, future
+        months show as covered and won't count toward the total owed.
       </div>
     </div>
 
     <div class="detail-card">
       <div class="detail-top">
         <div class="section-title" style="margin:0;">Rent schedule</div>
+        <div class="panel-actions" style="margin:0;">
+          <button class="btn-sm btn-primary" id="logPaymentBtn">Log a payment</button>
+          <button class="btn-sm btn-outline" id="arrearsInvoiceBtn">Raise invoice for full arrears</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead>
-            <tr><th>Month</th><th>Amount</th><th>Status</th><th>Paid</th><th>Method</th><th></th></tr>
-          </thead>
+          <thead><tr><th>Month</th><th>Billed</th><th>Paid</th><th>Outstanding</th><th>Status</th><th></th></tr></thead>
           <tbody id="scheduleRows"></tbody>
         </table>
       </div>
       <div class="footnote" style="border-top:none;">
-        New months are raised automatically as time passes, so there are always a few upcoming
-        entries here. Unpaid months never disappear on their own — mark them paid or raise an
-        invoice from the row's actions.
+        A payment always applies to the <strong>oldest unpaid or partial month first</strong> — log it
+        once and the schedule below updates itself, however many months it covers.
       </div>
+    </div>
+
+    <div class="detail-card">
+      <div class="section-title">Payments received</div>
+      <div id="paymentsList"></div>
+    </div>
+
+    <div class="detail-card">
+      <div class="section-title">Notes &amp; activity</div>
+      <div class="field-row">
+        <div class="field" style="flex:1;"><input type="text" id="newNoteText" placeholder="Add a dated note — e.g. called tenant, left voicemail…"></div>
+        <button class="btn-sm btn-save" id="addNoteBtn" style="height:39px;align-self:flex-end;">Add note</button>
+      </div>
+      <div id="notesList"></div>
     </div>
   </div>
 </main>
@@ -94,8 +112,8 @@
 <!-- Log payment modal -->
 <div class="add-overlay" id="payOverlay">
   <div class="modal">
-    <h2 id="payTitle">Log payment</h2>
-    <div class="modal-sub" id="payMonthLabel"></div>
+    <h2>Log payment</h2>
+    <div class="modal-sub">This is allocated automatically to the oldest unpaid or partial month(s) first.</div>
     <div class="field-row">
       <div class="field"><label>Date paid</label><input type="date" id="pay_date"></div>
       <div class="field"><label>Amount (£)</label><input type="number" id="pay_amount" min="0" step="0.01"></div>
@@ -111,7 +129,7 @@
         <option value="Other">Other</option>
       </select>
     </div>
-    <div class="field"><label>Note (optional)</label><input type="text" id="pay_note" placeholder="e.g. paid £50 short, remainder next month"></div>
+    <div class="field"><label>Note (optional)</label><input type="text" id="pay_note" placeholder="e.g. tenant says this covers most of what's owed"></div>
     <div class="modal-actions">
       <button class="btn-cancel" id="cancelPayBtn">Cancel</button>
       <button class="btn-primary" id="savePayBtn">Save payment</button>
@@ -126,134 +144,166 @@
   let data = [];
   let current = null;
   let agency = null;
-  let payingDue = null; // which period's due-date we're currently logging a payment for
 
   async function init(){
     data = await loadData();
     agency = await loadAgency();
     renderSyncBanner("syncBanner");
     current = data.find(p=>p.id===propId);
-    if(!current){
-      document.getElementById("notFound").style.display = "block";
-      return;
-    }
+    if(!current){ document.getElementById("notFound").style.display = "block"; return; }
     document.getElementById("content").style.display = "block";
     fillForm();
   }
 
   function fillForm(){
-    const cp = currentPeriod(current);
-    const st = periodStatus(cp);
+    const stats = propertyStats(current);
+    const st = status(current);
     document.getElementById("d_id").textContent = current.id;
     document.getElementById("d_addrLabel").textContent = current.addr;
-    document.getElementById("d_badge").textContent = st==="paid"?"Paid":st==="flagged"?"Flagged":"Pending";
+    document.getElementById("d_badge").textContent = statusLabel(st);
     document.getElementById("d_badge").className = "badge " + st;
-    document.getElementById("d_overdue").textContent = st==="flagged" ? `${daysOverdue(current)} days overdue` : "";
 
     document.getElementById("d_addr").value = current.addr;
     document.getElementById("d_tenant").value = current.tenant;
     document.getElementById("d_phone").value = current.phone || "";
     document.getElementById("d_email").value = current.email || "";
     document.getElementById("d_rent").value = current.rent;
-    document.getElementById("d_notes").value = current.notes || "";
 
     const links = [];
     if(current.phone) links.push(`<a href="tel:${escapeHtml(current.phone)}">Call ${escapeHtml(current.phone)}</a>`);
     if(current.email) links.push(`<a href="mailto:${escapeHtml(current.email)}">Email ${escapeHtml(current.email)}</a>`);
     document.getElementById("contactLinks").innerHTML = links.join("");
 
-    renderSchedule();
+    document.getElementById("statsKpis").innerHTML = `
+      <div class="kpi"><div class="label">Overall payments</div><div class="value">${fmtGBP(stats.totalReceived)}</div></div>
+      <div class="kpi paid"><div class="label">Amount paid (to date)</div><div class="value">${fmtGBP(stats.paidToDate)}</div></div>
+      <div class="kpi flag"><div class="label">Amount due</div><div class="value">${fmtGBP(stats.amountDue)}</div></div>
+      <div class="kpi flag"><div class="label">Unpaid months</div><div class="value">${stats.unpaidMonths}</div></div>
+      <div class="kpi"><div class="label">Partial months</div><div class="value">${stats.partialMonths}</div></div>
+    `;
+
+    renderSchedule(stats);
+    renderPayments();
+    renderNotes();
   }
 
-  function renderSchedule(){
-    const rows = current.periods.slice().sort((a,b)=> a.due < b.due ? 1 : -1); // newest first
-    document.getElementById("scheduleRows").innerHTML = rows.map(pr=>{
-      const st = periodStatus(pr);
-      const badgeLabel = st==="paid" ? "Paid" : st==="flagged" ? "Flagged" : "Pending";
-      let actions = "";
-      if(st === "paid"){
-        actions = `<button class="btn-sm btn-outline" data-action="unpay" data-due="${pr.due}">Mark unpaid</button>`;
-      } else {
-        actions = `
-          <button class="btn-sm btn-mark" data-action="pay" data-due="${pr.due}">Mark paid</button>
-          <button class="btn-sm btn-outline" data-action="invoice" data-due="${pr.due}">Raise invoice</button>
-        `;
-      }
+  function renderSchedule(stats){
+    const rows = stats.alloc.slice().sort((a,b)=> a.due < b.due ? 1 : -1); // newest first
+    document.getElementById("scheduleRows").innerHTML = rows.map(a=>{
+      const outstanding = round2(a.amount - a.paidAmount);
+      const invoiceBtn = a.status !== "paid"
+        ? `<button class="btn-sm btn-outline" data-action="invoice" data-due="${a.due}">Raise invoice</button>`
+        : "";
       return `
         <tr>
-          <td data-label="Month">${fmtMonth(pr.due)} <span class="addr">(due ${fmtDate(pr.due)})</span></td>
-          <td data-label="Amount">${fmtGBP(pr.amount)}</td>
-          <td data-label="Status"><span class="badge ${st}">${badgeLabel}</span></td>
-          <td data-label="Paid">${fmtDate(pr.paid)}</td>
-          <td data-label="Method">${pr.method ? escapeHtml(pr.method) : "—"}</td>
-          <td data-label="" style="white-space:nowrap;">${actions}</td>
-        </tr>
-      `;
+          <td data-label="Month">${fmtMonth(a.due)} <span class="addr">(due ${fmtDate(a.due)})</span></td>
+          <td data-label="Billed">${fmtGBP(a.amount)}</td>
+          <td data-label="Paid">${fmtGBP(a.paidAmount)}</td>
+          <td data-label="Outstanding">${outstanding > 0 ? fmtGBP(outstanding) : "—"}</td>
+          <td data-label="Status"><span class="badge ${a.status}">${statusLabel(a.status)}</span></td>
+          <td data-label="">${invoiceBtn}</td>
+        </tr>`;
     }).join("");
   }
 
-  document.getElementById("scheduleRows").addEventListener("click", async (e)=>{
-    const btn = e.target.closest("button");
-    if(!btn) return;
-    const due = btn.dataset.due;
-    const period = current.periods.find(pr=>pr.due===due);
-    const action = btn.dataset.action;
+  function renderPayments(){
+    const list = current.payments.slice().sort((a,b)=> a.date < b.date ? 1 : -1);
+    document.getElementById("paymentsList").innerHTML = list.length ? list.map(pm=>`
+      <div class="history-item">
+        <span>
+          <strong>${fmtDate(pm.date)}</strong> — ${fmtGBP(pm.amount)}${pm.method? " · "+escapeHtml(pm.method):""}
+          ${pm.note? `<br><span class="addr">${escapeHtml(pm.note)}</span>` : ""}
+        </span>
+        <button class="btn-sm btn-del" data-action="delpay" data-id="${pm.id}">Delete</button>
+      </div>
+    `).join("") : `<div class="history-empty">No payments logged yet.</div>`;
+  }
 
-    if(action === "pay"){
-      openPayModal(period);
-    } else if(action === "unpay"){
-      if(!confirm(`Mark ${fmtMonth(period.due)} as unpaid again? This clears its payment record.`)) return;
-      period.paid = null; period.method = ""; period.note = "";
-      await saveData(data);
-      renderSchedule();
-      fillForm();
-    } else if(action === "invoice"){
-      raiseInvoice(current, period, agency);
-    }
+  function renderNotes(){
+    const list = (current.log||[]).slice().sort((a,b)=> a.ts < b.ts ? 1 : -1);
+    document.getElementById("notesList").innerHTML = list.length ? list.map((n,i)=>`
+      <div class="history-item">
+        <span><span class="addr">${fmtDateTime(n.ts)}</span><br>${escapeHtml(n.text)}</span>
+      </div>
+    `).join("") : `<div class="history-empty">No notes yet.</div>`;
+  }
+
+  document.getElementById("scheduleRows").addEventListener("click", (e)=>{
+    const btn = e.target.closest("button[data-action='invoice']");
+    if(!btn) return;
+    const period = getAllocatedPeriods(current).find(a=>a.due===btn.dataset.due);
+    raisePeriodInvoice(current, period, agency);
   });
 
-  function openPayModal(period){
-    payingDue = period.due;
-    document.getElementById("payMonthLabel").textContent = `${fmtMonth(period.due)} — due ${fmtDate(period.due)}`;
-    document.getElementById("pay_date").value = TODAY.toISOString().slice(0,10);
-    document.getElementById("pay_amount").value = period.amount;
-    document.getElementById("pay_method").value = period.method || "Bank transfer";
-    document.getElementById("pay_note").value = period.note || "";
+  document.getElementById("paymentsList").addEventListener("click", async (e)=>{
+    const btn = e.target.closest("button[data-action='delpay']");
+    if(!btn) return;
+    if(!confirm("Delete this payment? The schedule will recalculate.")) return;
+    current.payments = current.payments.filter(pm=>pm.id !== btn.dataset.id);
+    await saveData(data);
+    fillForm();
+  });
+
+  document.getElementById("arrearsInvoiceBtn").addEventListener("click", ()=>raiseArrearsInvoice(current, agency));
+
+  // ---------- Log payment modal ----------
+  document.getElementById("logPaymentBtn").addEventListener("click", ()=>{
+    document.getElementById("pay_date").value = todayISO();
+    document.getElementById("pay_amount").value = current.rent;
+    document.getElementById("pay_method").value = "Bank transfer";
+    document.getElementById("pay_note").value = "";
     document.getElementById("payOverlay").classList.add("open");
-  }
+  });
   document.getElementById("cancelPayBtn").addEventListener("click", ()=>document.getElementById("payOverlay").classList.remove("open"));
   document.getElementById("payOverlay").addEventListener("click", e=>{
     if(e.target.id === "payOverlay") document.getElementById("payOverlay").classList.remove("open");
   });
   document.getElementById("savePayBtn").addEventListener("click", async ()=>{
-    const period = current.periods.find(pr=>pr.due===payingDue);
-    const paidDate = document.getElementById("pay_date").value;
-    if(!paidDate){ alert("Please enter the date paid."); return; }
-    period.paid = paidDate;
-    period.amount = Number(document.getElementById("pay_amount").value) || period.amount;
-    period.method = document.getElementById("pay_method").value;
-    period.note = document.getElementById("pay_note").value;
+    const dateVal = document.getElementById("pay_date").value;
+    const amountVal = Number(document.getElementById("pay_amount").value);
+    if(!dateVal || !amountVal || amountVal <= 0){ alert("Please enter a valid date and amount."); return; }
+    current.payments.push({
+      id: genId(), date: dateVal, amount: amountVal,
+      method: document.getElementById("pay_method").value,
+      note: document.getElementById("pay_note").value.trim(),
+    });
+    ensureFuturePeriods(current);
     document.getElementById("payOverlay").classList.remove("open");
     await saveData(data);
-    renderSchedule();
     fillForm();
   });
 
+  // ---------- Notes ----------
+  document.getElementById("addNoteBtn").addEventListener("click", async ()=>{
+    const text = document.getElementById("newNoteText").value.trim();
+    if(!text) return;
+    current.log = current.log || [];
+    current.log.push({ts: new Date().toISOString(), text});
+    document.getElementById("newNoteText").value = "";
+    await saveData(data);
+    renderNotes();
+  });
+  document.getElementById("newNoteText").addEventListener("keydown", (e)=>{
+    if(e.key === "Enter") document.getElementById("addNoteBtn").click();
+  });
+
+  // ---------- Save / delete property ----------
   document.getElementById("saveDetailBtn").addEventListener("click", async ()=>{
     current.addr = document.getElementById("d_addr").value.trim();
     current.tenant = document.getElementById("d_tenant").value.trim();
     current.phone = document.getElementById("d_phone").value.trim();
     current.email = document.getElementById("d_email").value.trim();
     current.rent = Number(document.getElementById("d_rent").value) || 0;
-    current.notes = document.getElementById("d_notes").value;
-    // Update the amount for any not-yet-due, unpaid future periods to match the new standard rent.
-    current.periods.forEach(pr=>{
-      if(!pr.paid && new Date(pr.due) >= TODAY) pr.amount = current.rent;
-    });
+    // Update amount for not-yet-due, unpaid future periods to match the new standard rent.
+    const today = todayISO();
+    current.periods.forEach(pr=>{ if(pr.due >= today) pr.amount = current.rent; });
     await saveData(data);
     fillForm();
     alert("Saved.");
   });
+
+  document.getElementById("exportExcelBtn").addEventListener("click", ()=>exportPropertyExcel(current));
+  document.getElementById("exportPdfBtn").addEventListener("click", ()=>printPropertyStatement(current));
 
   document.getElementById("deleteDetailBtn").addEventListener("click", async ()=>{
     if(!confirm(`Remove ${current.id} from the tracker? This cannot be undone.`)) return;
