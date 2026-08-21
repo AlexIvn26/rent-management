@@ -59,20 +59,34 @@ function ensureFuturePeriods(p, ahead){
   return changed;
 }
 
-// Returns periods (sorted, oldest first) with paidAmount and status attached,
-// computed fresh from the payments pool — never stored, always derived.
+// Returns periods (sorted, oldest first) with paidAmount, status, and the
+// individual payment(s) that contributed to each one — a payment can span
+// several months, and a month can be topped up by more than one payment.
 function getAllocatedPeriods(p){
-  const sorted = p.periods.slice().sort((a,b)=> a.due < b.due ? -1 : 1);
-  let pool = (p.payments||[]).reduce((s,pm)=>s+Number(pm.amount),0);
+  const periods = p.periods.slice().sort((a,b)=> a.due < b.due ? -1 : 1)
+    .map(pr=>({due: pr.due, amount: Number(pr.amount), remaining: Number(pr.amount), paidAmount: 0, contributions: []}));
+  const payments = (p.payments||[]).slice().sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+
+  payments.forEach(pm=>{
+    let left = Number(pm.amount);
+    for(const pr of periods){
+      if(left <= 0.004) break;
+      if(pr.remaining <= 0.004) continue;
+      const take = round2(Math.min(pr.remaining, left));
+      pr.remaining = round2(pr.remaining - take);
+      pr.paidAmount = round2(pr.paidAmount + take);
+      pr.contributions.push({date: pm.date, amount: take, method: pm.method||"", note: pm.note||""});
+      left = round2(left - take);
+    }
+  });
+
   const today = todayISO();
-  return sorted.map(pr=>{
-    const paidAmount = round2(Math.min(pool, pr.amount));
-    pool = round2(pool - paidAmount);
+  return periods.map(pr=>{
     let st;
-    if(paidAmount <= 0.004){ st = pr.due < today ? "flagged" : "pending"; }
-    else if(paidAmount < pr.amount - 0.004){ st = "partial"; }
+    if(pr.paidAmount <= 0.004){ st = pr.due < today ? "flagged" : "pending"; }
+    else if(pr.paidAmount < pr.amount - 0.004){ st = "partial"; }
     else { st = "paid"; }
-    return {due: pr.due, amount: pr.amount, paidAmount, status: st};
+    return {due: pr.due, amount: pr.amount, paidAmount: pr.paidAmount, status: st, contributions: pr.contributions};
   });
 }
 

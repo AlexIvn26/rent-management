@@ -1,14 +1,16 @@
 :root{
   --navy:#12203b;
-  --paper:#f6f7fb;
-  --card:#ffffff;
-  --line:#e3e6ee;
+  --paper:#e9edf3;
+  --card:#fcfdfe;
+  --line:#dde2eb;
   --text:#1c2333;
   --muted:#6b7280;
   --paid:#1e8a5f;
   --paid-bg:#e5f6ee;
   --pending:#a06a00;
   --pending-bg:#fdf3d9;
+  --partial:#b5651d;
+  --partial-bg:#fbe3cf;
   --flag:#b3261e;
   --flag-bg:#fbe6e4;
   --accent:#2e5aac;
@@ -73,6 +75,7 @@ tbody tr.clickable:hover{background:#fafcff;}
 .badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:11.5px;font-weight:700;}
 .badge.paid{background:var(--paid-bg);color:var(--paid);}
 .badge.pending{background:var(--pending-bg);color:var(--pending);}
+.badge.partial{background:var(--partial-bg);color:var(--partial);}
 .badge.flagged{background:var(--flag-bg);color:var(--flag);}
 .chevron{color:var(--muted);font-size:16px;}
 .empty{padding:40px;text-align:center;color:var(--muted);}
