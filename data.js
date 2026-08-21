@@ -60,33 +60,29 @@ function ensureFuturePeriods(p, ahead){
 }
 
 // Returns periods (sorted, oldest first) with paidAmount, status, and the
-// individual payment(s) that contributed to each one — a payment can span
-// several months, and a month can be topped up by more than one payment.
+// payment(s) actually made *in that same calendar month* attached to each.
+// A payment only ever affects the month it was paid in — it never cascades
+// to cover other months in the table. Any amount paid beyond what a given
+// month needed still counts toward the overall account total (via
+// propertyStats), it just isn't shown as "covering" a different row.
+function monthKey(iso){ return String(iso).slice(0,7); } // "YYYY-MM"
+
 function getAllocatedPeriods(p){
-  const periods = p.periods.slice().sort((a,b)=> a.due < b.due ? -1 : 1)
-    .map(pr=>({due: pr.due, amount: Number(pr.amount), remaining: Number(pr.amount), paidAmount: 0, contributions: []}));
+  const periods = p.periods.slice().sort((a,b)=> a.due < b.due ? -1 : 1);
   const payments = (p.payments||[]).slice().sort((a,b)=> a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
-
-  payments.forEach(pm=>{
-    let left = Number(pm.amount);
-    for(const pr of periods){
-      if(left <= 0.004) break;
-      if(pr.remaining <= 0.004) continue;
-      const take = round2(Math.min(pr.remaining, left));
-      pr.remaining = round2(pr.remaining - take);
-      pr.paidAmount = round2(pr.paidAmount + take);
-      pr.contributions.push({id: pm.id, date: pm.date, amount: take, method: pm.method||"", note: pm.note||""});
-      left = round2(left - take);
-    }
-  });
-
   const today = todayISO();
+
   return periods.map(pr=>{
+    const key = monthKey(pr.due);
+    const matched = payments.filter(pm => monthKey(pm.date) === key);
+    const rawPaid = round2(matched.reduce((s,pm)=>s+Number(pm.amount),0));
+    const paidAmount = round2(Math.min(rawPaid, pr.amount));
     let st;
-    if(pr.paidAmount <= 0.004){ st = pr.due < today ? "flagged" : "pending"; }
-    else if(pr.paidAmount < pr.amount - 0.004){ st = "partial"; }
+    if(paidAmount <= 0.004){ st = pr.due < today ? "flagged" : "pending"; }
+    else if(paidAmount < pr.amount - 0.004){ st = "partial"; }
     else { st = "paid"; }
-    return {due: pr.due, amount: pr.amount, paidAmount: pr.paidAmount, status: st, contributions: pr.contributions};
+    const contributions = matched.map(pm => ({id: pm.id, date: pm.date, amount: Number(pm.amount), method: pm.method||"", note: pm.note||""}));
+    return {due: pr.due, amount: pr.amount, paidAmount, status: st, contributions};
   });
 }
 
@@ -95,9 +91,12 @@ function propertyStats(p){
   const today = todayISO();
   const due = alloc.filter(a=>a.due <= today);
   const billedToDate = round2(due.reduce((s,a)=>s+a.amount,0));
-  const paidToDate = round2(due.reduce((s,a)=>s+a.paidAmount,0));
-  const amountDue = Math.max(0, round2(billedToDate - paidToDate));
   const totalReceived = round2((p.payments||[]).reduce((s,pm)=>s+Number(pm.amount),0));
+  // Total due is total billed vs total received, full stop — independent of which
+  // specific row a payment happened to land on. This is what makes an overpayment
+  // in one month reduce the overall balance rather than needing to "cover" another row.
+  const amountDue = Math.max(0, round2(billedToDate - totalReceived));
+  const paidToDate = round2(billedToDate - amountDue);
   const unpaidMonths = due.filter(a=>a.status==="flagged").length;
   const partialMonths = due.filter(a=>a.status==="partial").length;
   const worstOverdueDays = due.filter(a=>a.status==="flagged").reduce((m,a)=>Math.max(m, daysBetween(a.due, today)), 0);
@@ -338,7 +337,7 @@ function fmtDateTime(iso){
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
-function statusLabel(st){ return st==="paid"?"Paid":st==="flagged"?"Unpaid":st==="partial"?"Partial":"Pending"; }
+function statusLabel(st){ return st==="paid"?"Paid":st==="flagged"?"Overdue":st==="partial"?"Partial":"Pending"; }
 
 /* ---------- Export / Import ---------- */
 

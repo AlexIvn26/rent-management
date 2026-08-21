@@ -84,15 +84,14 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Billed</th><th>Payment(s)</th><th>Outstanding</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Month</th><th>Billed</th><th>Payment(s)</th><th>Status</th><th>Outstanding</th><th></th></tr></thead>
           <tbody id="scheduleRows"></tbody>
         </table>
       </div>
       <div class="footnote" style="border-top:none;">
-        A payment always applies to the <strong>oldest unpaid or partial month first</strong> — log it
-        once and the schedule below updates itself, however many months it covers. Deleting a month
-        just removes that billing entry; any payment already logged against it reallocates across
-        whatever's left.
+        A payment is matched to whichever month it was <strong>actually paid in</strong> — it only
+        ever affects that row. If it's more than that month needed, the extra simply reduces the
+        <strong>total amount due</strong> for the account above; it won't mark a different month as paid.
       </div>
     </div>
 
@@ -111,7 +110,7 @@
 <div class="add-overlay" id="payOverlay">
   <div class="modal">
     <h2>Log payment</h2>
-    <div class="modal-sub">This is allocated automatically to the oldest unpaid or partial month(s) first.</div>
+    <div class="modal-sub">This will be matched to whichever month's row the date paid falls in.</div>
     <div class="field-row">
       <div class="field"><label>Date paid</label><input type="date" id="pay_date"></div>
       <div class="field"><label>Amount (£)</label><input type="number" id="pay_amount" min="0" step="0.01"></div>
@@ -131,6 +130,19 @@
     <div class="modal-actions">
       <button class="btn-cancel" id="cancelPayBtn">Cancel</button>
       <button class="btn-primary" id="savePayBtn">Save payment</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit month modal -->
+<div class="add-overlay" id="editMonthOverlay">
+  <div class="modal">
+    <h2>Edit month</h2>
+    <div class="modal-sub" id="editMonthLabel"></div>
+    <div class="field"><label>Billed amount (£)</label><input type="number" id="edit_amount" min="0" step="0.01"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="cancelEditMonthBtn">Cancel</button>
+      <button class="btn-primary" id="saveEditMonthBtn">Save</button>
     </div>
   </div>
 </div>
@@ -188,16 +200,14 @@
     const rows = stats.alloc.slice().sort((a,b)=> a.due < b.due ? 1 : -1); // newest first
     document.getElementById("scheduleRows").innerHTML = rows.map(a=>{
       const outstanding = round2(a.amount - a.paidAmount);
-      const invoiceBtn = a.status !== "paid"
-        ? `<button class="btn-sm btn-outline" data-action="invoice" data-due="${a.due}">Raise invoice</button>`
-        : "";
       const payHtml = (a.contributions||[]).length
         ? a.contributions.map(c=>{
-            const methodPart = c.method ? ` · ${escapeHtml(c.method)}` : "";
-            const notePart = c.note ? ` — <em>${escapeHtml(c.note)}</em>` : "";
-            return `<div style="margin-bottom:4px;">
-              <span class="addr">${fmtDate(c.date)} · ${fmtGBP(c.amount)}${methodPart}${notePart}</span>
-              <button class="btn-sm btn-del" data-action="delpay" data-payid="${c.id}" style="padding:1px 6px;font-size:10.5px;margin-left:4px;">✕</button>
+            const details = [c.method, c.note].filter(Boolean).join(" — ");
+            return `<div style="margin-bottom:5px;">
+              <div>${fmtDate(c.date)} — ${fmtGBP(c.amount)}</div>
+              ${details ? `<div class="addr">${escapeHtml(details)}</div>` : ""}
+              <button type="button" data-action="delpay" data-payid="${c.id}"
+                style="background:none;border:none;padding:0;margin-top:1px;color:var(--flag);font-size:11.5px;cursor:pointer;text-decoration:underline;">Remove</button>
             </div>`;
           }).join("")
         : `<span class="addr">—</span>`;
@@ -206,15 +216,97 @@
           <td data-label="Month">${fmtMonth(a.due)} <span class="addr">(due ${fmtDate(a.due)})</span></td>
           <td data-label="Billed">${fmtGBP(a.amount)}</td>
           <td data-label="Payment(s)">${payHtml}</td>
-          <td data-label="Outstanding">${outstanding > 0 ? fmtGBP(outstanding) : "—"}</td>
           <td data-label="Status"><span class="badge ${a.status}">${statusLabel(a.status)}</span></td>
-          <td data-label="" style="white-space:nowrap;">
-            ${invoiceBtn}
-            <button class="btn-sm btn-del" data-action="delmonth" data-due="${a.due}">Delete month</button>
+          <td data-label="Outstanding">${outstanding > 0 ? fmtGBP(outstanding) : "—"}</td>
+          <td data-label="" style="position:relative;">
+            <button class="btn-sm btn-outline row-menu-btn" data-due="${a.due}" title="Options">&#8942;</button>
           </td>
         </tr>`;
     }).join("");
   }
+
+  function closeRowMenu(){
+    const open = document.querySelector(".row-menu");
+    if(open) open.remove();
+  }
+
+  document.getElementById("scheduleRows").addEventListener("click", (e)=>{
+    const menuBtn = e.target.closest(".row-menu-btn");
+    if(menuBtn){
+      const already = menuBtn.parentElement.querySelector(".row-menu");
+      closeRowMenu();
+      if(already) return; // was already open — click acts as a toggle-close
+      const due = menuBtn.dataset.due;
+      const period = getAllocatedPeriods(current).find(a=>a.due===due);
+      const menu = document.createElement("div");
+      menu.className = "row-menu";
+      menu.innerHTML = `
+        ${period.status !== "paid" ? `<button data-action="invoice" data-due="${due}">Raise invoice</button>` : ""}
+        <button data-action="edit" data-due="${due}">Edit month</button>
+        <button data-action="delmonth" data-due="${due}" class="danger">Delete month</button>
+      `;
+      menuBtn.parentElement.appendChild(menu);
+      return;
+    }
+    if(e.target.closest(".row-menu")) return; // let the action handler below deal with it
+    closeRowMenu();
+  });
+
+  document.addEventListener("click", (e)=>{
+    if(!e.target.closest(".row-menu") && !e.target.closest(".row-menu-btn")) closeRowMenu();
+  });
+
+  document.getElementById("scheduleRows").addEventListener("click", async (e)=>{
+    const btn = e.target.closest("button[data-action]");
+    if(!btn) return;
+    const action = btn.dataset.action;
+    const due = btn.dataset.due;
+    closeRowMenu();
+
+    if(action === "invoice"){
+      const period = getAllocatedPeriods(current).find(a=>a.due===due);
+      raisePeriodInvoice(current, period, agency);
+
+    } else if(action === "edit"){
+      openEditMonthModal(due);
+
+    } else if(action === "delmonth"){
+      if(!confirm(`Delete ${fmtMonth(due)} from the schedule? Any payment logged in that month stays on file but won't be matched to a row anymore.`)) return;
+      const ok = deletePeriod(current, due);
+      if(!ok){ alert("Can't delete this — a property needs at least one month in its schedule."); return; }
+      await saveData(data);
+      fillForm();
+
+    } else if(action === "delpay"){
+      if(!confirm("Remove this payment? It'll be taken off the account entirely.")) return;
+      current.payments = current.payments.filter(pm => pm.id !== btn.dataset.payid);
+      ensureFuturePeriods(current);
+      await saveData(data);
+      fillForm();
+    }
+  });
+
+  let editingDue = null;
+  function openEditMonthModal(due){
+    editingDue = due;
+    const period = current.periods.find(pr=>pr.due===due);
+    document.getElementById("editMonthLabel").textContent = `${fmtMonth(due)} — due ${fmtDate(due)}`;
+    document.getElementById("edit_amount").value = period.amount;
+    document.getElementById("editMonthOverlay").classList.add("open");
+  }
+  document.getElementById("cancelEditMonthBtn").addEventListener("click", ()=>document.getElementById("editMonthOverlay").classList.remove("open"));
+  document.getElementById("editMonthOverlay").addEventListener("click", e=>{
+    if(e.target.id === "editMonthOverlay") document.getElementById("editMonthOverlay").classList.remove("open");
+  });
+  document.getElementById("saveEditMonthBtn").addEventListener("click", async ()=>{
+    const period = current.periods.find(pr=>pr.due===editingDue);
+    const amt = Number(document.getElementById("edit_amount").value);
+    if(!amt || amt <= 0){ alert("Please enter a valid amount."); return; }
+    period.amount = amt;
+    document.getElementById("editMonthOverlay").classList.remove("open");
+    await saveData(data);
+    fillForm();
+  });
 
   function renderNotes(){
     const list = (current.log||[]).slice().sort((a,b)=> a.ts < b.ts ? 1 : -1);
@@ -225,33 +317,8 @@
     `).join("") : `<div class="history-empty">No notes yet.</div>`;
   }
 
-  document.getElementById("scheduleRows").addEventListener("click", async (e)=>{
-    const btn = e.target.closest("button");
-    if(!btn) return;
-    const action = btn.dataset.action;
-
-    if(action === "invoice"){
-      const period = getAllocatedPeriods(current).find(a=>a.due===btn.dataset.due);
-      raisePeriodInvoice(current, period, agency);
-
-    } else if(action === "delmonth"){
-      if(!confirm(`Delete ${fmtMonth(btn.dataset.due)} from the schedule? Any payment already logged against it will reallocate across the remaining months.`)) return;
-      const ok = deletePeriod(current, btn.dataset.due);
-      if(!ok){ alert("Can't delete this — a property needs at least one month in its schedule."); return; }
-      await saveData(data);
-      fillForm();
-
-    } else if(action === "delpay"){
-      if(!confirm("Delete this payment entirely? If it covered more than one month, all of them will recalculate.")) return;
-      current.payments = current.payments.filter(pm => pm.id !== btn.dataset.payid);
-      ensureFuturePeriods(current);
-      await saveData(data);
-      fillForm();
-    }
-  });
-
   document.getElementById("addMonthBtn").addEventListener("click", async ()=>{
-    const due = addManualPeriod(current);
+    addManualPeriod(current);
     await saveData(data);
     fillForm();
   });
