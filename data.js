@@ -75,7 +75,7 @@ function getAllocatedPeriods(p){
       const take = round2(Math.min(pr.remaining, left));
       pr.remaining = round2(pr.remaining - take);
       pr.paidAmount = round2(pr.paidAmount + take);
-      pr.contributions.push({date: pm.date, amount: take, method: pm.method||"", note: pm.note||""});
+      pr.contributions.push({id: pm.id, date: pm.date, amount: take, method: pm.method||"", note: pm.note||""});
       left = round2(left - take);
     }
   });
@@ -123,6 +123,25 @@ function currentPeriod(p){
   const future = alloc.filter(a=>a.due > today);
   if(future.length) return future[0];
   return alloc[alloc.length-1];
+}
+
+// Manually add one more month to the schedule, beyond whatever
+// ensureFuturePeriods has already queued up automatically.
+function addManualPeriod(p){
+  const lastDue = p.periods.length ? p.periods.reduce((max,pr)=> pr.due > max ? pr.due : max, p.periods[0].due) : todayISO();
+  const due = addMonths(lastDue, 1);
+  p.periods.push({due, amount: Number(p.rent) || 0});
+  return due;
+}
+
+// Remove a single month from the schedule. Refuses to delete the last
+// remaining month (returns false) — a property always needs at least one.
+// Any payments already logged simply reallocate across what's left.
+function deletePeriod(p, due){
+  if(p.periods.length <= 1) return false;
+  p.periods = p.periods.filter(pr => pr.due !== due);
+  ensureFuturePeriods(p);
+  return true;
 }
 
 /* ---------- Migration from older saved shapes ---------- */

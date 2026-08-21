@@ -77,29 +77,23 @@
       <div class="detail-top">
         <div class="section-title" style="margin:0;">Rent schedule</div>
         <div class="panel-actions" style="margin:0;">
+          <button class="btn-sm btn-outline" id="addMonthBtn">+ Add month</button>
           <button class="btn-sm btn-primary" id="logPaymentBtn">Log a payment</button>
           <button class="btn-sm btn-outline" id="arrearsInvoiceBtn">Raise invoice for full arrears</button>
         </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Billed</th><th>Paid</th><th>Outstanding</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Month</th><th>Billed</th><th>Payment(s)</th><th>Outstanding</th><th>Status</th><th></th></tr></thead>
           <tbody id="scheduleRows"></tbody>
         </table>
       </div>
       <div class="footnote" style="border-top:none;">
         A payment always applies to the <strong>oldest unpaid or partial month first</strong> — log it
-        once and the schedule below updates itself, however many months it covers.
+        once and the schedule below updates itself, however many months it covers. Deleting a month
+        just removes that billing entry; any payment already logged against it reallocates across
+        whatever's left.
       </div>
-    </div>
-
-    <div class="detail-card">
-      <div class="section-title">Payments received</div>
-      <div class="footnote" style="border-top:none;padding-top:0;margin-top:-4px;margin-bottom:12px;">
-        The full raw list of everything logged, in case you need to correct or delete one — the date
-        and note for each are already shown against the month(s) they cover, above.
-      </div>
-      <div id="paymentsList"></div>
     </div>
 
     <div class="detail-card">
@@ -187,7 +181,6 @@
     `;
 
     renderSchedule(stats);
-    renderPayments();
     renderNotes();
   }
 
@@ -198,34 +191,29 @@
       const invoiceBtn = a.status !== "paid"
         ? `<button class="btn-sm btn-outline" data-action="invoice" data-due="${a.due}">Raise invoice</button>`
         : "";
-      const contribLines = (a.contributions||[]).map(c=>{
-        const methodPart = c.method ? ` · ${escapeHtml(c.method)}` : "";
-        const notePart = c.note ? ` — <em>${escapeHtml(c.note)}</em>` : "";
-        return `<div class="addr" style="margin-top:3px;">Paid ${fmtDate(c.date)} · ${fmtGBP(c.amount)}${methodPart}${notePart}</div>`;
-      }).join("");
+      const payHtml = (a.contributions||[]).length
+        ? a.contributions.map(c=>{
+            const methodPart = c.method ? ` · ${escapeHtml(c.method)}` : "";
+            const notePart = c.note ? ` — <em>${escapeHtml(c.note)}</em>` : "";
+            return `<div style="margin-bottom:4px;">
+              <span class="addr">${fmtDate(c.date)} · ${fmtGBP(c.amount)}${methodPart}${notePart}</span>
+              <button class="btn-sm btn-del" data-action="delpay" data-payid="${c.id}" style="padding:1px 6px;font-size:10.5px;margin-left:4px;">✕</button>
+            </div>`;
+          }).join("")
+        : `<span class="addr">—</span>`;
       return `
         <tr>
-          <td data-label="Month">${fmtMonth(a.due)} <span class="addr">(due ${fmtDate(a.due)})</span>${contribLines}</td>
+          <td data-label="Month">${fmtMonth(a.due)} <span class="addr">(due ${fmtDate(a.due)})</span></td>
           <td data-label="Billed">${fmtGBP(a.amount)}</td>
-          <td data-label="Paid">${fmtGBP(a.paidAmount)}</td>
+          <td data-label="Payment(s)">${payHtml}</td>
           <td data-label="Outstanding">${outstanding > 0 ? fmtGBP(outstanding) : "—"}</td>
           <td data-label="Status"><span class="badge ${a.status}">${statusLabel(a.status)}</span></td>
-          <td data-label="">${invoiceBtn}</td>
+          <td data-label="" style="white-space:nowrap;">
+            ${invoiceBtn}
+            <button class="btn-sm btn-del" data-action="delmonth" data-due="${a.due}">Delete month</button>
+          </td>
         </tr>`;
     }).join("");
-  }
-
-  function renderPayments(){
-    const list = current.payments.slice().sort((a,b)=> a.date < b.date ? 1 : -1);
-    document.getElementById("paymentsList").innerHTML = list.length ? list.map(pm=>`
-      <div class="history-item">
-        <span>
-          <strong>${fmtDate(pm.date)}</strong> — ${fmtGBP(pm.amount)}${pm.method? " · "+escapeHtml(pm.method):""}
-          ${pm.note? `<br><span class="addr">${escapeHtml(pm.note)}</span>` : ""}
-        </span>
-        <button class="btn-sm btn-del" data-action="delpay" data-id="${pm.id}">Delete</button>
-      </div>
-    `).join("") : `<div class="history-empty">No payments logged yet.</div>`;
   }
 
   function renderNotes(){
@@ -237,18 +225,33 @@
     `).join("") : `<div class="history-empty">No notes yet.</div>`;
   }
 
-  document.getElementById("scheduleRows").addEventListener("click", (e)=>{
-    const btn = e.target.closest("button[data-action='invoice']");
+  document.getElementById("scheduleRows").addEventListener("click", async (e)=>{
+    const btn = e.target.closest("button");
     if(!btn) return;
-    const period = getAllocatedPeriods(current).find(a=>a.due===btn.dataset.due);
-    raisePeriodInvoice(current, period, agency);
+    const action = btn.dataset.action;
+
+    if(action === "invoice"){
+      const period = getAllocatedPeriods(current).find(a=>a.due===btn.dataset.due);
+      raisePeriodInvoice(current, period, agency);
+
+    } else if(action === "delmonth"){
+      if(!confirm(`Delete ${fmtMonth(btn.dataset.due)} from the schedule? Any payment already logged against it will reallocate across the remaining months.`)) return;
+      const ok = deletePeriod(current, btn.dataset.due);
+      if(!ok){ alert("Can't delete this — a property needs at least one month in its schedule."); return; }
+      await saveData(data);
+      fillForm();
+
+    } else if(action === "delpay"){
+      if(!confirm("Delete this payment entirely? If it covered more than one month, all of them will recalculate.")) return;
+      current.payments = current.payments.filter(pm => pm.id !== btn.dataset.payid);
+      ensureFuturePeriods(current);
+      await saveData(data);
+      fillForm();
+    }
   });
 
-  document.getElementById("paymentsList").addEventListener("click", async (e)=>{
-    const btn = e.target.closest("button[data-action='delpay']");
-    if(!btn) return;
-    if(!confirm("Delete this payment? The schedule will recalculate.")) return;
-    current.payments = current.payments.filter(pm=>pm.id !== btn.dataset.id);
+  document.getElementById("addMonthBtn").addEventListener("click", async ()=>{
+    const due = addManualPeriod(current);
     await saveData(data);
     fillForm();
   });
