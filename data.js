@@ -42,7 +42,7 @@ function ensureFuturePeriods(p, ahead){
   ahead = ahead || 3;
   if(!p.periods) p.periods = [];
   if(p.periods.length === 0){
-    p.periods.push({due: todayISO(), amount: Number(p.rent)||0});
+    p.periods.push({due: todayISO(), amount: Number(p.rent)||0, type:"Rent"});
   }
   let changed = false;
   let guard = 0;
@@ -52,7 +52,7 @@ function ensureFuturePeriods(p, ahead){
     const pool = (p.payments||[]).reduce((s,pm)=>s+Number(pm.amount),0);
     if(future.length >= ahead && totalBilled >= pool) break;
     const lastDue = p.periods.reduce((max,pr)=> pr.due > max ? pr.due : max, p.periods[0].due);
-    p.periods.push({due: addMonths(lastDue, 1), amount: Number(p.rent)||0});
+    p.periods.push({due: addMonths(lastDue, 1), amount: Number(p.rent)||0, type:"Rent"});
     changed = true;
     guard++;
   }
@@ -82,7 +82,7 @@ function getAllocatedPeriods(p){
     else if(paidAmount < pr.amount - 0.004){ st = "partial"; }
     else { st = "paid"; }
     const contributions = matched.map(pm => ({id: pm.id, date: pm.date, amount: Number(pm.amount), method: pm.method||"", note: pm.note||""}));
-    return {due: pr.due, amount: pr.amount, paidAmount, status: st, contributions};
+    return {due: pr.due, amount: pr.amount, type: pr.type || "Rent", paidAmount, status: st, contributions};
   });
 }
 
@@ -124,13 +124,12 @@ function currentPeriod(p){
   return alloc[alloc.length-1];
 }
 
-// Manually add one more month to the schedule, beyond whatever
-// ensureFuturePeriods has already queued up automatically.
-function addManualPeriod(p){
-  const lastDue = p.periods.length ? p.periods.reduce((max,pr)=> pr.due > max ? pr.due : max, p.periods[0].due) : todayISO();
-  const due = addMonths(lastDue, 1);
-  p.periods.push({due, amount: Number(p.rent) || 0});
-  return due;
+// Manually add a billing entry for a specific date, amount and type (e.g.
+// "Rent", "Late fee", "Maintenance charge") — for anything outside, or in
+// addition to, the standard auto-generated monthly rent cycle.
+function addRevenueEntry(p, due, amount, type){
+  p.periods.push({due, amount: Number(amount) || 0, type: (type||"Rent").trim() || "Rent"});
+  p.periods.sort((a,b)=> a.due < b.due ? -1 : 1);
 }
 
 // Remove a single month from the schedule. Refuses to delete the last
@@ -181,6 +180,12 @@ function migrateProperty(p){
     changed = true;
   }
   if("notes" in p){ delete p.notes; changed = true; }
+
+  // v3 -> v4: periods gained a type/label (Rent, Late fee, etc.) — default older ones to "Rent"
+  if((p.periods||[]).some(pr=>!pr.type)){
+    p.periods.forEach(pr=>{ if(!pr.type) pr.type = "Rent"; });
+    changed = true;
+  }
 
   if(ensureFuturePeriods(p)) changed = true;
   return changed;
@@ -380,6 +385,7 @@ function exportPropertyExcel(property){
   const stats = propertyStats(property);
   const scheduleRows = stats.alloc.map(a=>({
     "Month": fmtMonth(a.due),
+    "Type": a.type,
     "Due date": fmtDate(a.due),
     "Billed (£)": a.amount,
     "Paid (£)": a.paidAmount,
@@ -391,7 +397,7 @@ function exportPropertyExcel(property){
   }));
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(scheduleRows);
-  ws1["!cols"] = [{wch:16},{wch:12},{wch:12},{wch:12},{wch:14},{wch:10}];
+  ws1["!cols"] = [{wch:16},{wch:14},{wch:12},{wch:12},{wch:12},{wch:14},{wch:10}];
   XLSX.utils.book_append_sheet(wb, ws1, "Rent schedule");
   const ws2 = XLSX.utils.json_to_sheet(paymentRows);
   ws2["!cols"] = [{wch:12},{wch:12},{wch:16},{wch:30}];
@@ -466,7 +472,7 @@ function pdfBadge(st){ return `<span class="badge ${st}">${statusLabel(st)}</spa
 function printPropertyStatement(property){
   const stats = propertyStats(property);
   const rows = stats.alloc.slice().reverse().map(a=>`
-    <tr><td>${fmtMonth(a.due)}</td><td>${fmtDate(a.due)}</td><td>${fmtGBP(a.amount)}</td>
+    <tr><td>${fmtMonth(a.due)}</td><td>${escapeHtml(a.type)}</td><td>${fmtDate(a.due)}</td><td>${fmtGBP(a.amount)}</td>
     <td>${fmtGBP(a.paidAmount)}</td><td>${fmtGBP(round2(a.amount-a.paidAmount))}</td><td>${pdfBadge(a.status)}</td></tr>`).join("");
   const payRows = property.payments.slice().sort((a,b)=> a.date < b.date ? 1 : -1).map(pm=>`
     <tr><td>${fmtDate(pm.date)}</td><td>${fmtGBP(pm.amount)}</td><td>${escapeHtml(pm.method||"—")}</td><td>${escapeHtml(pm.note||"")}</td></tr>`).join("");
@@ -475,7 +481,7 @@ function printPropertyStatement(property){
     <div class="muted">Tenant: ${escapeHtml(property.tenant)}${property.phone? " · "+escapeHtml(property.phone):""}${property.email? " · "+escapeHtml(property.email):""}</div>
     <div class="muted" style="margin-top:8px;">Total received: ${fmtGBP(stats.totalReceived)} &nbsp;•&nbsp; Amount due: <strong>${fmtGBP(stats.amountDue)}</strong> &nbsp;•&nbsp; ${stats.unpaidMonths} unpaid month${stats.unpaidMonths===1?"":"s"}, ${stats.partialMonths} partial</div>
     <h2>Rent schedule</h2>
-    <table><tr><th>Month</th><th>Due date</th><th>Billed</th><th>Paid</th><th>Outstanding</th><th>Status</th></tr>${rows}</table>
+    <table><tr><th>Month</th><th>Type</th><th>Due date</th><th>Billed</th><th>Paid</th><th>Outstanding</th><th>Status</th></tr>${rows}</table>
     <h2>Payments received</h2>
     <table><tr><th>Date</th><th>Amount</th><th>Method</th><th>Note</th></tr>${payRows || '<tr><td colspan="4" class="muted">No payments logged yet.</td></tr>'}</table>`;
   printStatementDoc(`Statement — ${property.id}`, body);
@@ -537,7 +543,7 @@ function raisePeriodInvoice(property, allocPeriod, agency){
     </div>
     <table>
       <tr><th>Description</th><th>Rent period</th><th>Amount due</th></tr>
-      <tr><td>${allocPeriod.status==="partial" ? "Remaining balance for" : "Monthly rent"}</td><td>${fmtMonth(allocPeriod.due)}</td><td>${fmtGBP(outstanding)}</td></tr>
+      <tr><td>${allocPeriod.status==="partial" ? `Remaining balance — ${escapeHtml(allocPeriod.type||"Rent")}` : escapeHtml(allocPeriod.type||"Rent")}</td><td>${fmtMonth(allocPeriod.due)}</td><td>${fmtGBP(outstanding)}</td></tr>
       <tr><td colspan="2" class="total">Total due</td><td class="total">${fmtGBP(outstanding)}</td></tr>
     </table>
     <div class="box"><h3>Due date</h3>${fmtDate(allocPeriod.due)}</div>
