@@ -266,7 +266,7 @@
     if(!e.target.closest(".row-menu") && !e.target.closest(".row-menu-btn")) closeRowMenu();
   });
 
-  document.getElementById("scheduleRows").addEventListener("click", async (e)=>{
+  document.addEventListener("click", async (e)=>{
     const btn = e.target.closest("button[data-action]");
     if(!btn) return;
     const action = btn.dataset.action;
