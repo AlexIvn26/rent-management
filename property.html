@@ -136,10 +136,11 @@
 
 <!-- Edit month modal -->
 <div class="add-overlay" id="editMonthOverlay">
-  <div class="modal">
+  <div class="modal" style="max-width:460px;">
     <h2>Edit month</h2>
     <div class="modal-sub" id="editMonthLabel"></div>
     <div class="field"><label>Billed amount (£)</label><input type="number" id="edit_amount" min="0" step="0.01"></div>
+    <div id="editPaymentsContainer"></div>
     <div class="modal-actions">
       <button class="btn-cancel" id="cancelEditMonthBtn">Cancel</button>
       <button class="btn-primary" id="saveEditMonthBtn">Save</button>
@@ -204,7 +205,7 @@
         ? a.contributions.map(c=>{
             const details = [c.method, c.note].filter(Boolean).join(" — ");
             return `<div style="margin-bottom:5px;">
-              <div>${fmtDate(c.date)} — ${fmtGBP(c.amount)}</div>
+              <div>${fmtGBP(c.amount)} — ${fmtDate(c.date)}</div>
               ${details ? `<div class="addr">${escapeHtml(details)}</div>` : ""}
               <button type="button" data-action="delpay" data-payid="${c.id}"
                 style="background:none;border:none;padding:0;margin-top:1px;color:var(--flag);font-size:11.5px;cursor:pointer;text-decoration:underline;">Remove</button>
@@ -228,14 +229,16 @@
   function closeRowMenu(){
     const open = document.querySelector(".row-menu");
     if(open) open.remove();
+    document.querySelectorAll(".row-menu-btn[data-menu-open]").forEach(b=>delete b.dataset.menuOpen);
   }
 
   document.getElementById("scheduleRows").addEventListener("click", (e)=>{
     const menuBtn = e.target.closest(".row-menu-btn");
     if(menuBtn){
-      const already = menuBtn.parentElement.querySelector(".row-menu");
+      const wasOpen = !!document.querySelector(".row-menu");
+      const openForThisBtn = menuBtn.dataset.menuOpen === "1";
       closeRowMenu();
-      if(already) return; // was already open — click acts as a toggle-close
+      if(wasOpen && openForThisBtn) return; // click was a toggle-close on the same button
       const due = menuBtn.dataset.due;
       const period = getAllocatedPeriods(current).find(a=>a.due===due);
       const menu = document.createElement("div");
@@ -245,7 +248,14 @@
         <button data-action="edit" data-due="${due}">Edit month</button>
         <button data-action="delmonth" data-due="${due}" class="danger">Delete month</button>
       `;
-      menuBtn.parentElement.appendChild(menu);
+      document.body.appendChild(menu);
+      const rect = menuBtn.getBoundingClientRect();
+      const menuWidth = menu.offsetWidth;
+      let left = rect.right - menuWidth;
+      if(left < 8) left = 8;
+      menu.style.top = (rect.bottom + 4) + "px";
+      menu.style.left = left + "px";
+      menuBtn.dataset.menuOpen = "1";
       return;
     }
     if(e.target.closest(".row-menu")) return; // let the action handler below deal with it
@@ -286,14 +296,53 @@
     }
   });
 
+  const PAY_METHODS = ["Bank transfer","Cash","Cheque","Card","Standing order","Other"];
+
   let editingDue = null;
   function openEditMonthModal(due){
     editingDue = due;
     const period = current.periods.find(pr=>pr.due===due);
     document.getElementById("editMonthLabel").textContent = `${fmtMonth(due)} — due ${fmtDate(due)}`;
     document.getElementById("edit_amount").value = period.amount;
+
+    const key = monthKey(due);
+    const matched = current.payments.filter(pm => monthKey(pm.date) === key);
+    const container = document.getElementById("editPaymentsContainer");
+    if(matched.length === 0){
+      container.innerHTML = `<div class="footnote" style="border-top:none;padding-top:10px;">No payment logged for this month yet — use "Log a payment" instead.</div>`;
+    } else {
+      container.innerHTML = `<div class="section-title" style="margin-top:16px;">Payment(s) this month</div>` +
+        matched.map(pm => `
+          <div style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px;" data-payid="${pm.id}">
+            <div class="field-row">
+              <div class="field"><label>Date paid</label><input type="date" class="epay-date" value="${pm.date}"></div>
+              <div class="field"><label>Amount (£)</label><input type="number" class="epay-amount" min="0" step="0.01" value="${pm.amount}"></div>
+            </div>
+            <div class="field">
+              <label>Method</label>
+              <select class="epay-method" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;font-size:13.5px;font-family:inherit;">
+                ${PAY_METHODS.map(m=>`<option ${m===pm.method?"selected":""}>${m}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field" style="margin-bottom:8px;"><label>Note</label><input type="text" class="epay-note" value="${escapeHtml(pm.note||"")}"></div>
+            <button type="button" class="btn-sm btn-del" data-delpay-in-modal="${pm.id}">Remove this payment</button>
+          </div>
+        `).join("");
+    }
     document.getElementById("editMonthOverlay").classList.add("open");
   }
+
+  document.getElementById("editPaymentsContainer").addEventListener("click", async (e)=>{
+    const btn = e.target.closest("[data-delpay-in-modal]");
+    if(!btn) return;
+    if(!confirm("Remove this payment? It'll be taken off the account entirely.")) return;
+    current.payments = current.payments.filter(pm => pm.id !== btn.dataset.delpayInModal);
+    ensureFuturePeriods(current);
+    await saveData(data);
+    fillForm();
+    openEditMonthModal(editingDue); // keep the modal open, refreshed
+  });
+
   document.getElementById("cancelEditMonthBtn").addEventListener("click", ()=>document.getElementById("editMonthOverlay").classList.remove("open"));
   document.getElementById("editMonthOverlay").addEventListener("click", e=>{
     if(e.target.id === "editMonthOverlay") document.getElementById("editMonthOverlay").classList.remove("open");
@@ -301,8 +350,23 @@
   document.getElementById("saveEditMonthBtn").addEventListener("click", async ()=>{
     const period = current.periods.find(pr=>pr.due===editingDue);
     const amt = Number(document.getElementById("edit_amount").value);
-    if(!amt || amt <= 0){ alert("Please enter a valid amount."); return; }
+    if(!amt || amt <= 0){ alert("Please enter a valid billed amount."); return; }
     period.amount = amt;
+
+    let valid = true;
+    document.querySelectorAll("#editPaymentsContainer [data-payid]").forEach(block=>{
+      const pm = current.payments.find(x=>x.id===block.dataset.payid);
+      if(!pm) return;
+      const d = block.querySelector(".epay-date").value;
+      const a = Number(block.querySelector(".epay-amount").value);
+      if(!d || !a || a <= 0){ valid = false; return; }
+      pm.date = d; pm.amount = a;
+      pm.method = block.querySelector(".epay-method").value;
+      pm.note = block.querySelector(".epay-note").value.trim();
+    });
+    if(!valid){ alert("Please check each payment has a valid date and amount."); return; }
+
+    ensureFuturePeriods(current);
     document.getElementById("editMonthOverlay").classList.remove("open");
     await saveData(data);
     fillForm();

@@ -120,10 +120,12 @@ tbody tr.clickable:hover{background:#fafcff;}
 
 .footnote{margin-top:18px;font-size:11.5px;color:var(--muted);line-height:1.5;border-top:1px solid var(--line);padding-top:14px;}
 
-/* Row options menu (⋮) used in the rent schedule table */
+/* Row options menu (⋮) used in the rent schedule table — appended to <body>
+   and position:fixed, since the table wrapper's overflow:hidden (needed for
+   rounded corners) would otherwise clip an absolutely-positioned dropdown. */
 .row-menu-btn{padding:4px 9px;font-size:14px;line-height:1;}
 .row-menu{
-  position:absolute;top:calc(100% + 4px);right:0;z-index:30;
+  position:fixed;z-index:1000;
   background:#fff;border:1px solid var(--line);border-radius:8px;
   box-shadow:0 6px 18px rgba(15,20,35,0.12);min-width:150px;overflow:hidden;
 }
