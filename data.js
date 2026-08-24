@@ -429,18 +429,25 @@ function exportBackup(data){
 function importBackup(file, onDone){
   const reader = new FileReader();
   reader.onload = async (e)=>{
+    let parsed;
     try{
-      const parsed = JSON.parse(e.target.result);
-      if(!Array.isArray(parsed)) throw new Error("File is not a valid backup.");
-      const ok = confirm(`Import ${parsed.length} propert${parsed.length===1?"y":"ies"} from this backup? This replaces everything currently shown, on every device this account syncs to.`);
-      if(!ok) return;
+      parsed = JSON.parse(e.target.result);
+      if(!Array.isArray(parsed)) throw new Error("not an array");
+    } catch(err){
+      alert("Could not read this file — make sure it's a backup exported from this dashboard.");
+      console.error("Import: file parse failed:", err);
+      return;
+    }
+    const ok = confirm(`Import ${parsed.length} propert${parsed.length===1?"y":"ies"} from this backup? This replaces everything currently shown, on every device this account syncs to.`);
+    if(!ok) return;
+    try{
       parsed.forEach(p=>migrateProperty(p));
       await saveData(parsed);
       onDone(parsed);
       alert("Backup imported.");
     } catch(err){
-      alert("Could not read this file — make sure it's a backup exported from this dashboard.");
-      console.error(err);
+      alert("The file looked fine, but saving it failed — likely a connection hiccup. Please try again.");
+      console.error("Import: save failed after a valid file was read:", err);
     }
   };
   reader.readAsText(file);
