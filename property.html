@@ -39,6 +39,7 @@
         <div><span class="badge" id="d_badge">—</span></div>
       </div>
 
+      <div class="field-row"><div class="field"><label>Property ID</label><input type="text" id="d_propid"></div></div>
       <div class="field-row"><div class="field"><label>Address</label><input type="text" id="d_addr"></div></div>
       <div class="field-row"><div class="field"><label>Tenant name</label><input type="text" id="d_tenant"></div></div>
       <div class="field-row">
@@ -197,6 +198,7 @@
     document.getElementById("d_badge").textContent = statusLabel(st);
     document.getElementById("d_badge").className = "badge " + st;
 
+    document.getElementById("d_propid").value = current.id;
     document.getElementById("d_addr").value = current.addr;
     document.getElementById("d_tenant").value = current.tenant;
     document.getElementById("d_phone").value = current.phone || "";
@@ -472,6 +474,14 @@
 
   // ---------- Save / delete property ----------
   document.getElementById("saveDetailBtn").addEventListener("click", async ()=>{
+    const newId = document.getElementById("d_propid").value.trim();
+    if(!newId){ alert("Property ID can't be empty."); return; }
+    if(newId !== current.id && data.some(p => p.id === newId)){
+      alert(`"${newId}" is already used by another property — pick a different ID.`);
+      return;
+    }
+    const idChanged = newId !== current.id;
+    current.id = newId;
     current.addr = document.getElementById("d_addr").value.trim();
     current.tenant = document.getElementById("d_tenant").value.trim();
     current.phone = document.getElementById("d_phone").value.trim();
@@ -481,8 +491,12 @@
     const today = todayISO();
     current.periods.forEach(pr=>{ if(pr.due >= today) pr.amount = current.rent; });
     await saveData(data);
-    fillForm();
-    alert("Saved.");
+    if(idChanged){
+      location.href = `property.html?id=${encodeURIComponent(newId)}`; // keep the URL in sync with the new ID
+    } else {
+      fillForm();
+      alert("Saved.");
+    }
   });
 
   document.getElementById("exportExcelBtn").addEventListener("click", ()=>exportPropertyExcel(current));
