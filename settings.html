@@ -29,6 +29,22 @@
   <div id="syncBanner"></div>
 
   <div class="detail-card" style="max-width:520px;">
+    <div class="section-title">Sync across devices</div>
+    <div class="footnote" style="border-top:none;padding-top:0;margin-top:0;margin-bottom:16px;">
+      Paste the Web App URL from your deployed Google Apps Script here. Once saved, this device
+      will read and write directly to your Google Sheet — do the same on your phone with the
+      <strong>same URL</strong> and both devices will always show the same data.
+    </div>
+    <div class="field"><label>Google Sheet sync URL</label><input type="text" id="sheet_url" placeholder="https://script.google.com/macros/s/…/exec"></div>
+    <div id="sheetStatus" style="font-size:12.5px;margin:6px 0 4px;"></div>
+    <div class="panel-actions">
+      <button class="btn-sm btn-outline" id="testSheetBtn">Test connection</button>
+      <button class="btn-sm btn-save" id="saveSheetBtn">Save &amp; use this Sheet</button>
+      <button class="btn-sm btn-del" id="clearSheetBtn">Disconnect</button>
+    </div>
+  </div>
+
+  <div class="detail-card" style="max-width:520px;">
     <div class="section-title">Invoice details</div>
     <div class="footnote" style="border-top:none;padding-top:0;margin-top:0;margin-bottom:16px;">
       Shown on every invoice you raise from a property's Rent schedule. Leave blank and invoices
@@ -54,6 +70,7 @@
   async function init(){
     await loadData(); // establishes storageMode before we touch agency settings
     renderSyncBanner("syncBanner");
+    document.getElementById("sheet_url").value = getSheetUrl();
     const agency = await loadAgency();
     document.getElementById("a_name").value = agency.name || "";
     document.getElementById("a_address").value = agency.address || "";
@@ -61,6 +78,48 @@
     document.getElementById("a_phone").value = agency.phone || "";
     document.getElementById("a_bank").value = agency.bankDetails || "";
   }
+
+  function setSheetStatus(msg, ok){
+    const el = document.getElementById("sheetStatus");
+    el.textContent = msg;
+    el.style.color = ok ? "var(--paid)" : "var(--flag)";
+  }
+
+  document.getElementById("testSheetBtn").addEventListener("click", async ()=>{
+    const url = document.getElementById("sheet_url").value.trim();
+    if(!url){ setSheetStatus("Paste a URL first.", false); return; }
+    setSheetStatus("Testing…", true);
+    try{
+      await sheetGet("properties", url);
+      setSheetStatus("✓ Connected successfully — the Sheet responded correctly.", true);
+    } catch(err){
+      console.error(err);
+      setSheetStatus("✗ Couldn't reach that URL. Double-check it was deployed with \"Anyone\" access, and that you copied the full /exec link.", false);
+    }
+  });
+
+  document.getElementById("saveSheetBtn").addEventListener("click", async ()=>{
+    const url = document.getElementById("sheet_url").value.trim();
+    if(!url){ setSheetStatus("Paste a URL first.", false); return; }
+    setSheetStatus("Connecting…", true);
+    try{
+      await sheetGet("properties", url);
+      setSheetUrl(url);
+      setSheetStatus("✓ Saved. Reloading to switch this device over to the Sheet…", true);
+      setTimeout(()=>location.reload(), 900);
+    } catch(err){
+      console.error(err);
+      setSheetStatus("✗ Couldn't connect, so nothing was saved. Fix the URL and try again.", false);
+    }
+  });
+
+  document.getElementById("clearSheetBtn").addEventListener("click", ()=>{
+    if(!confirm("Disconnect this device from the Google Sheet? It'll fall back to saving in this browser only.")) return;
+    setSheetUrl("");
+    document.getElementById("sheet_url").value = "";
+    setSheetStatus("Disconnected. Reloading…", true);
+    setTimeout(()=>location.reload(), 700);
+  });
 
   document.getElementById("saveAgencyBtn").addEventListener("click", async ()=>{
     const agency = {

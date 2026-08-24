@@ -2,9 +2,39 @@
 
 const STORAGE_KEY = "properties";
 const AGENCY_KEY = "agencySettings";
+const SHEET_URL_KEY = "rentManagerSheetUrl"; // localStorage key holding the Apps Script Web App URL
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
 
-let storageMode = "none"; // "claude" | "local" | "none"
+let storageMode = "none"; // "sheet" | "claude" | "local" | "none"
+
+/* ---------- Google Sheet backend (optional — configured on the Settings page) ---------- */
+
+function getSheetUrl(){
+  try{ return localStorage.getItem(SHEET_URL_KEY) || ""; }
+  catch(e){ return ""; }
+}
+function setSheetUrl(url){
+  try{ localStorage.setItem(SHEET_URL_KEY, url); }
+  catch(e){ console.error("Could not save the Sheet URL:", e); }
+}
+
+async function sheetGet(key, urlOverride){
+  const url = urlOverride || getSheetUrl();
+  const res = await fetch(`${url}?key=${encodeURIComponent(key)}`);
+  if(!res.ok) throw new Error("Sheet GET failed: " + res.status);
+  const body = await res.json();
+  return body.value; // string or null
+}
+async function sheetSet(key, value, urlOverride){
+  const url = urlOverride || getSheetUrl();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "text/plain;charset=utf-8"}, // avoids a CORS preflight Apps Script can't answer
+    body: JSON.stringify({key, value}),
+  });
+  if(!res.ok) throw new Error("Sheet POST failed: " + res.status);
+  return true;
+}
 
 function todayISO(){ return TODAY.toISOString().slice(0,10); }
 function round2(n){ return Math.round((Number(n)+Number.EPSILON)*100)/100; }
@@ -234,6 +264,24 @@ function seedData(){
 
 async function loadData(){
   let data;
+
+  // Tier 0: your Google Sheet, if you've set one up on the Settings page —
+  // this is the only tier that actually syncs across devices on a hosted site.
+  if(getSheetUrl()){
+    try{
+      const raw = await sheetGet(STORAGE_KEY);
+      data = raw ? JSON.parse(raw) : seedData();
+      storageMode = "sheet";
+      let changed = !raw;
+      data.forEach(p=>{ if(migrateProperty(p)) changed = true; });
+      if(changed) await saveData(data);
+      return data;
+    } catch(err){
+      console.error("Sheet unavailable, falling back:", err);
+      // falls through to the tiers below
+    }
+  }
+
   if(window.storage){
     try{
       const result = await window.storage.get(STORAGE_KEY, false);
@@ -270,6 +318,10 @@ async function loadData(){
 }
 
 async function saveData(data){
+  if(storageMode === "sheet"){
+    try{ await sheetSet(STORAGE_KEY, JSON.stringify(data)); return; }
+    catch(err){ console.error("Sheet save failed, falling back to localStorage:", err); storageMode = "local"; }
+  }
   if(storageMode === "claude"){
     try{
       const res = await window.storage.set(STORAGE_KEY, JSON.stringify(data), false);
@@ -289,10 +341,15 @@ async function saveData(data){
 function renderSyncBanner(elId){
   const el = document.getElementById(elId);
   if(!el) return;
-  if(storageMode === "claude"){
+  if(storageMode === "sheet"){
+    el.innerHTML = `<div class="sync-banner ok"><span class="sync-dot"></span>Synced via Google Sheets — the same data appears on every device.</div>`;
+  } else if(storageMode === "claude"){
     el.innerHTML = `<div class="sync-banner ok"><span class="sync-dot"></span>Saved to your account — open this same dashboard from your phone to see the same data.</div>`;
   } else if(storageMode === "local"){
-    el.innerHTML = `<div class="sync-banner warn"><span class="sync-dot"></span>Saved to this browser only — it won't appear on other devices. Use Export/Import to move data between devices.</div>`;
+    const hint = getSheetUrl()
+      ? "The Google Sheet connection failed just now, so this is a temporary fallback — check Settings."
+      : "Set up Google Sheets sync on the Settings page for real cross-device access.";
+    el.innerHTML = `<div class="sync-banner warn"><span class="sync-dot"></span>Saved to this browser only — it won't appear on other devices. ${hint}</div>`;
   } else {
     el.innerHTML = `<div class="sync-banner warn"><span class="sync-dot"></span>Nothing is being saved right now — changes will be lost on reload. Use Export backup before closing this page.</div>`;
   }
@@ -303,6 +360,12 @@ function renderSyncBanner(elId){
 function defaultAgency(){ return {name:"", address:"", email:"", phone:"", bankDetails:""}; }
 
 async function loadAgency(){
+  if(storageMode === "sheet"){
+    try{
+      const raw = await sheetGet(AGENCY_KEY);
+      return raw ? JSON.parse(raw) : defaultAgency();
+    } catch(e){ console.error("Sheet agency load failed, falling back:", e); }
+  }
   try{
     if(window.storage && storageMode === "claude"){
       const result = await window.storage.get(AGENCY_KEY, false);
@@ -316,6 +379,10 @@ async function loadAgency(){
 }
 
 async function saveAgency(agency){
+  if(storageMode === "sheet"){
+    try{ await sheetSet(AGENCY_KEY, JSON.stringify(agency)); return; }
+    catch(e){ console.error("Sheet save failed for agency settings, falling back:", e); }
+  }
   if(storageMode === "claude"){
     try{ await window.storage.set(AGENCY_KEY, JSON.stringify(agency), false); return; }
     catch(e){ console.error("Claude save failed for agency settings, using localStorage:", e); }
